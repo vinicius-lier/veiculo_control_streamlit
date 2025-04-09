@@ -6,7 +6,7 @@ import os
 # Configuração da página
 st.set_page_config(
     page_title="Sistema de Gestão de Veículos",
-    page_icon="🚗",
+    page_icon="imagens\4.png",
     layout="wide"
 )
 

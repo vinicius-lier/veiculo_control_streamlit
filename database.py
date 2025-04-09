@@ -3,6 +3,15 @@ import bcrypt
 from datetime import datetime
 import os
 
+def hash_password(password):
+    # Gera um salt e faz o hash da senha
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode(), salt)
+
+def verify_password(password, hashed):
+    # Verifica se a senha corresponde ao hash
+    return bcrypt.checkpw(password.encode(), hashed)
+
 # Conexão com SQLite
 def get_db():
     db = sqlite3.connect('vehicles.db')
@@ -53,9 +62,9 @@ def init_db():
     cursor.execute('SELECT * FROM users WHERE username = ?', ('admin',))
     if not cursor.fetchone():
         # Senha padrão: admin123
-        hashed = bcrypt.hashpw('admin123'.encode('utf-8'), bcrypt.gensalt())
+        hashed = hash_password('admin123')
         cursor.execute('INSERT INTO users (username, password, role) VALUES (?, ?, ?)',
-                      ('admin', hashed.decode('utf-8'), 'admin'))
+                      ('admin', hashed, 'admin'))
     
     db.commit()
     db.close()
@@ -70,9 +79,9 @@ def create_user(username, password):
         db.close()
         return False, "Usuário já existe"
     
-    hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+    hashed = hash_password(password)
     cursor.execute('INSERT INTO users (username, password, role) VALUES (?, ?, ?)',
-                  (username, hashed.decode('utf-8'), 'user'))
+                  (username, hashed, 'user'))
     
     db.commit()
     db.close()
@@ -90,7 +99,7 @@ def verify_user(username, password):
     if not user:
         return False, None
     
-    if bcrypt.checkpw(password.encode('utf-8'), user['password'].encode('utf-8')):
+    if verify_password(password, user['password']):
         return True, dict(user)
     return False, None
 
