@@ -1,6 +1,6 @@
 import sqlite3
 import bcrypt
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -149,6 +149,65 @@ def init_db():
     db.commit()
     db.close()
 
+def check_and_fix_database():
+    """Verifica e corrige problemas no banco de dados"""
+    db = get_db()
+    cursor = db.cursor()
+    
+    try:
+        # Verificar se a tabela vehicles existe
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='vehicles'")
+        if not cursor.fetchone():
+            # Recriar a tabela vehicles
+            cursor.execute('''
+            CREATE TABLE vehicles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plate TEXT UNIQUE NOT NULL,
+                type TEXT NOT NULL,
+                model TEXT NOT NULL,
+                year INTEGER NOT NULL,
+                color TEXT,
+                chassis_number TEXT,
+                status TEXT DEFAULT 'available',
+                created_at TEXT NOT NULL,
+                updated_at TEXT
+            )
+            ''')
+            db.commit()
+            return "Tabela de veículos recriada com sucesso."
+        
+        # Verificar se há registros duplicados
+        cursor.execute('''
+        SELECT plate, COUNT(*) as count 
+        FROM vehicles 
+        GROUP BY plate 
+        HAVING count > 1
+        ''')
+        duplicates = cursor.fetchall()
+        
+        if duplicates:
+            # Remover duplicatas mantendo apenas o registro mais recente
+            for plate, count in duplicates:
+                cursor.execute('''
+                DELETE FROM vehicles 
+                WHERE plate = ? AND id NOT IN (
+                    SELECT MAX(id) FROM vehicles WHERE plate = ?
+                )
+                ''', (plate, plate))
+            
+            db.commit()
+            return f"Removidas {len(duplicates)} placas duplicadas."
+        
+        return "Banco de dados verificado e está correto."
+    except Exception as e:
+        return f"Erro ao verificar banco de dados: {str(e)}"
+    finally:
+        db.close()
+
+# Adicionar chamada para verificar o banco ao inicializar
+init_db()
+check_and_fix_database()
+
 def create_user(username, password, name, email=None):
     """Cria um novo usuário"""
     db = get_db()
@@ -199,14 +258,15 @@ def register_driver(driver_data):
     db = get_db()
     cursor = db.cursor()
     
-    driver_id = f"driver_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     cursor.execute('''
-    INSERT INTO drivers (id, name, document, status, data_registro, categoria, validade, foto_cnh)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (driver_id, driver_data['nome'], driver_data['cnh'], 
-          'ativo', datetime.now().isoformat(), driver_data['categoria'],
-          driver_data['validade'], driver_data['foto_cnh']))
+    INSERT INTO drivers (name, document, phone, email, license_number, license_category, license_expiration, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (driver_data['nome'], driver_data['cnh'], 
+          driver_data.get('telefone', ''), driver_data.get('email', ''),
+          driver_data['cnh'], driver_data['categoria'],
+          driver_data['validade'], 'ativo', datetime.now().isoformat()))
     
+    driver_id = cursor.lastrowid
     db.commit()
     db.close()
     return driver_id
@@ -240,7 +300,7 @@ def check_driver_has_active_vehicle(driver_id):
     
     cursor.execute('''
     SELECT * FROM vehicle_exits 
-    WHERE driver_id = ? AND status = 'em_uso'
+    WHERE driver_id = ? AND status = 'in_progress'
     ''', (driver_id,))
     
     has_active = bool(cursor.fetchone())
@@ -253,18 +313,28 @@ def register_vehicle(vehicle_data):
     cursor = conn.cursor()
     
     try:
-        cursor.execute('''INSERT INTO vehicles (plate, type, model, year)
-                    VALUES (?, ?, ?, ?)''',
+        # Verificar se a placa já existe
+        cursor.execute('SELECT id FROM vehicles WHERE plate = ?', (vehicle_data['plate'].upper(),))
+        existing = cursor.fetchone()
+        
+        if existing:
+            return None, "Já existe um veículo cadastrado com esta placa."
+        
+        # Inserir o novo veículo
+        cursor.execute('''INSERT INTO vehicles (plate, type, model, year, color, chassis_number, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
                  (vehicle_data['plate'].upper(),
                   vehicle_data['type'],
                   vehicle_data['model'],
-                  vehicle_data['year']))
+                  vehicle_data['year'],
+                  vehicle_data.get('color', ''),
+                  vehicle_data.get('chassis_number', ''),
+                  'available',
+                  datetime.now().isoformat()))
         
         vehicle_id = cursor.lastrowid
         conn.commit()
         return vehicle_id, "Veículo cadastrado com sucesso!"
-    except sqlite3.IntegrityError:
-        return None, "Já existe um veículo cadastrado com esta placa."
     except Exception as e:
         return None, f"Erro ao cadastrar veículo: {str(e)}"
     finally:
@@ -302,17 +372,23 @@ def register_vehicle_exit(data):
         # Registrar saída
         cursor.execute('''
             INSERT INTO vehicle_exits (
-                vehicle_id, driver_name, driver_document, driver_phone,
-                external_checklist, internal_checklist, exit_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                vehicle_id, driver_id, user_id, exit_date, expected_return_date,
+                initial_odometer, destination, purpose, status, external_checklist, 
+                internal_checklist, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             data['vehicle_id'],
-            data['driver_name'],
-            data['driver_document'],
-            data['driver_phone'],
+            data['driver_id'],
+            data['user_id'],
+            datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            data.get('expected_return_date', ''),
+            data.get('initial_odometer', 0),
+            data.get('destination', ''),
+            data.get('purpose', ''),
+            'in_progress',
             json.dumps(data['external_checklist']),
             json.dumps(data['internal_checklist']),
-            datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            datetime.now().isoformat()
         ))
         
         exit_id = cursor.lastrowid
@@ -320,9 +396,9 @@ def register_vehicle_exit(data):
         # Atualizar status do veículo
         cursor.execute('''
             UPDATE vehicles 
-            SET status = 'in_use' 
+            SET status = 'in_use', updated_at = ? 
             WHERE id = ?
-        ''', (data['vehicle_id'],))
+        ''', (datetime.now().isoformat(), data['vehicle_id']))
         
         conn.commit()
         
@@ -364,10 +440,11 @@ def generate_checklist_pdf(exit_id, data):
     elements.append(Spacer(1, 20))
     
     # Informações do motorista
+    driver = get_driver(data['driver_id'])
     elements.append(Paragraph("Informações do Motorista:", styles['Heading2']))
-    elements.append(Paragraph(f"Nome: {data['driver_name']}", styles['Normal']))
-    elements.append(Paragraph(f"Documento: {data['driver_document']}", styles['Normal']))
-    elements.append(Paragraph(f"Telefone: {data['driver_phone']}", styles['Normal']))
+    elements.append(Paragraph(f"Nome: {driver['name']}", styles['Normal']))
+    elements.append(Paragraph(f"Documento: {driver['document']}", styles['Normal']))
+    elements.append(Paragraph(f"Telefone: {driver.get('phone', 'Não informado')}", styles['Normal']))
     elements.append(Spacer(1, 20))
     
     # Checklist externo
@@ -393,7 +470,7 @@ def generate_checklist_pdf(exit_id, data):
     ]))
     elements.append(external_table)
     
-    if data['external_checklist']['observacoes_externas']:
+    if data['external_checklist'].get('observacoes_externas'):
         elements.append(Spacer(1, 10))
         elements.append(Paragraph("Observações Externas:", styles['Heading3']))
         elements.append(Paragraph(data['external_checklist']['observacoes_externas'], styles['Normal']))
@@ -423,7 +500,7 @@ def generate_checklist_pdf(exit_id, data):
     ]))
     elements.append(internal_table)
     
-    if data['internal_checklist']['observacoes_internas']:
+    if data['internal_checklist'].get('observacoes_internas'):
         elements.append(Spacer(1, 10))
         elements.append(Paragraph("Observações Internas:", styles['Heading3']))
         elements.append(Paragraph(data['internal_checklist']['observacoes_internas'], styles['Normal']))
@@ -453,7 +530,9 @@ def get_vehicle_by_id(vehicle_id):
                 'type': vehicle[2],
                 'model': vehicle[3],
                 'year': vehicle[4],
-                'status': vehicle[5]
+                'color': vehicle[5],
+                'chassis_number': vehicle[6],
+                'status': vehicle[7]
             }
         return None
     except Exception as e:
@@ -467,7 +546,7 @@ def get_active_exits():
     db = get_db()
     cursor = db.cursor()
     
-    cursor.execute('SELECT * FROM vehicle_exits WHERE status = ?', ('em_uso',))
+    cursor.execute('SELECT * FROM vehicle_exits WHERE status = ?', ('in_progress',))
     exits = cursor.fetchall()
     db.close()
     
@@ -485,16 +564,24 @@ def register_vehicle_return(exit_id, data):
         db.close()
         return False, "Saída não encontrada"
     
-    if exit_data['status'] != 'em_uso':
+    if exit_data['status'] != 'in_progress':
         db.close()
         return False, "Veículo já retornado"
     
     cursor.execute('''
     UPDATE vehicle_exits 
-    SET status = ?, data_retorno = ?, observations = ?, quilometragem = ?
+    SET status = ?, actual_return_date = ?, final_odometer = ?, observations = ?, updated_at = ?
     WHERE id = ?
-    ''', ('retornado', datetime.now().isoformat(), 
-          data.get('observations', ''), data.get('quilometragem', 0), exit_id))
+    ''', ('completed', datetime.now().isoformat(), 
+          data.get('final_odometer', 0), data.get('observations', ''), 
+          datetime.now().isoformat(), exit_id))
+    
+    # Atualizar status do veículo
+    cursor.execute('''
+    UPDATE vehicles 
+    SET status = 'available', updated_at = ? 
+    WHERE id = ?
+    ''', (datetime.now().isoformat(), exit_data['vehicle_id']))
     
     db.commit()
     db.close()
@@ -505,16 +592,23 @@ def get_weekly_report():
     db = get_db()
     cursor = db.cursor()
     
-    seven_days_ago = (datetime.now().timestamp() - (7 * 24 * 60 * 60))
-    cursor.execute('''
-    SELECT * FROM vehicle_exits 
-    WHERE datetime(data_saida) > datetime(?)
-    ''', (datetime.fromtimestamp(seven_days_ago).isoformat(),))
+    # Calcular a data de 7 dias atrás
+    seven_days_ago = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    seven_days_ago = (seven_days_ago - timedelta(days=7)).isoformat()
     
-    exits = cursor.fetchall()
-    db.close()
-    
-    return {row['id']: dict(row) for row in exits}
+    try:
+        cursor.execute('''
+        SELECT * FROM vehicle_exits 
+        WHERE datetime(exit_date) >= datetime(?)
+        ''', (seven_days_ago,))
+        
+        exits = cursor.fetchall()
+        return {row['id']: dict(row) for row in exits}
+    except Exception as e:
+        print(f"Erro ao gerar relatório semanal: {str(e)}")
+        return {}
+    finally:
+        db.close()
 
 def get_driver_statistics():
     """Retorna estatísticas dos motoristas"""
@@ -533,10 +627,10 @@ def get_driver_statistics():
     
     # Motorista com maior quilometragem
     cursor.execute('''
-    SELECT d.id, d.name, SUM(v.quilometragem) as total_km
+    SELECT d.id, d.name, SUM(v.final_odometer - v.initial_odometer) as total_km
     FROM drivers d
     JOIN vehicle_exits v ON d.id = v.driver_id
-    WHERE v.quilometragem IS NOT NULL
+    WHERE v.final_odometer IS NOT NULL AND v.initial_odometer IS NOT NULL
     GROUP BY d.id, d.name
     ORDER BY total_km DESC
     ''')
@@ -545,10 +639,10 @@ def get_driver_statistics():
     # Motorista com maior tempo de uso
     cursor.execute('''
     SELECT d.id, d.name, 
-           SUM(CAST((julianday(v.data_retorno) - julianday(v.data_saida)) * 24 AS INTEGER)) as total_horas
+           SUM(CAST((julianday(v.actual_return_date) - julianday(v.exit_date)) * 24 AS INTEGER)) as total_horas
     FROM drivers d
     JOIN vehicle_exits v ON d.id = v.driver_id
-    WHERE v.data_retorno IS NOT NULL
+    WHERE v.actual_return_date IS NOT NULL
     GROUP BY d.id, d.name
     ORDER BY total_horas DESC
     ''')
@@ -560,40 +654,4 @@ def get_driver_statistics():
         'most_exits': [dict(row) for row in most_exits],
         'most_km': [dict(row) for row in most_km],
         'most_time': [dict(row) for row in most_time]
-    }
-
-def create_tables():
-    """Cria as tabelas necessárias no banco de dados"""
-    conn = sqlite3.connect('vehicles.db')
-    cursor = conn.cursor()
-    
-    # Tabela de veículos
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS vehicles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            plate TEXT NOT NULL UNIQUE,
-            type TEXT NOT NULL,
-            model TEXT NOT NULL,
-            year INTEGER NOT NULL,
-            status TEXT NOT NULL DEFAULT 'available'
-        )
-    ''')
-    
-    # Tabela de saídas de veículos
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS vehicle_exits (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            vehicle_id INTEGER NOT NULL,
-            driver_name TEXT NOT NULL,
-            driver_document TEXT NOT NULL,
-            driver_phone TEXT NOT NULL,
-            external_checklist TEXT NOT NULL,
-            internal_checklist TEXT NOT NULL,
-            exit_date TEXT NOT NULL,
-            return_date TEXT,
-            FOREIGN KEY (vehicle_id) REFERENCES vehicles (id)
-        )
-    ''')
-    
-    conn.commit()
-    conn.close() 
+    } 
