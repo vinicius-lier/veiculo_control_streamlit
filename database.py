@@ -734,4 +734,33 @@ def get_driver_statistics():
         'mais_saidas': [dict(row) for row in most_exits],
         'mais_km': [dict(row) for row in most_km],
         'mais_tempo': [dict(row) for row in most_time]
-    } 
+    }
+
+def get_all_users():
+    """Retorna todos os usuários de forma segura (sem senhas)"""
+    db = get_db()
+    cursor = db.cursor()
+    
+    try:
+        cursor.execute('''
+        SELECT id, username, role, name, email, created_at, last_login 
+        FROM users
+        ORDER BY created_at DESC
+        ''')
+        users = cursor.fetchall()
+        
+        # Converte para dicionário com nomes em português
+        return {row['id']: {
+            'id': row['id'],
+            'usuario': row['username'],
+            'funcao': row['role'],
+            'nome': row['name'],
+            'email': row['email'],
+            'criado_em': row['created_at'],
+            'ultimo_acesso': row['last_login']
+        } for row in users}
+    except Exception as e:
+        print(f"Erro ao listar usuários: {str(e)}")
+        return {}
+    finally:
+        db.close() 
