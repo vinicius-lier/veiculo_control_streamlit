@@ -2,6 +2,14 @@ import sqlite3
 import bcrypt
 from datetime import datetime
 import os
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.units import inch
+import json
 
 def hash_password(password):
     # Gera um salt e faz o hash da senha
@@ -46,19 +54,35 @@ def init_db():
     )
     ''')
     
+    # Criar tabela de veículos
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS vehicles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        plate TEXT UNIQUE NOT NULL,
+        type TEXT NOT NULL,
+        model TEXT NOT NULL,
+        year INTEGER NOT NULL,
+        status TEXT DEFAULT 'available'
+    )
+    ''')
+    
     # Criar tabela de saídas de veículos
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS vehicle_exits (
-        id TEXT PRIMARY KEY,
-        driver_id TEXT NOT NULL,
-        vehicle_plate TEXT NOT NULL,
-        destination TEXT NOT NULL,
-        status TEXT NOT NULL,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        driver_id INTEGER NOT NULL,
+        vehicle_id INTEGER NOT NULL,
         data_saida TEXT NOT NULL,
         data_retorno TEXT,
-        observations TEXT,
+        odometro_inicial INTEGER,
+        odometro_final INTEGER,
         quilometragem INTEGER,
-        FOREIGN KEY (driver_id) REFERENCES drivers (id)
+        observations TEXT,
+        checklist_external TEXT,
+        checklist_internal TEXT,
+        checklist_damages TEXT,
+        FOREIGN KEY (driver_id) REFERENCES drivers (id),
+        FOREIGN KEY (vehicle_id) REFERENCES vehicles (id)
     )
     ''')
     
@@ -160,25 +184,220 @@ def check_driver_has_active_vehicle(driver_id):
     db.close()
     return has_active
 
+def register_vehicle(vehicle_data):
+    """Registra um novo veículo no banco de dados"""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute('''INSERT INTO vehicles (plate, type, model, year)
+                    VALUES (?, ?, ?, ?)''',
+                 (vehicle_data['plate'].upper(),
+                  vehicle_data['type'],
+                  vehicle_data['model'],
+                  vehicle_data['year']))
+        
+        vehicle_id = cursor.lastrowid
+        conn.commit()
+        return vehicle_id, "Veículo cadastrado com sucesso!"
+    except sqlite3.IntegrityError:
+        return None, "Já existe um veículo cadastrado com esta placa."
+    except Exception as e:
+        return None, f"Erro ao cadastrar veículo: {str(e)}"
+    finally:
+        conn.close()
+
+def get_all_vehicles():
+    """Retorna todos os veículos cadastrados"""
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM vehicles ORDER BY plate")
+    vehicles = {row['id']: dict(row) for row in cursor.fetchall()}
+    
+    conn.close()
+    return vehicles
+
+def get_vehicle(vehicle_id):
+    """Retorna os dados de um veículo específico"""
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM vehicles WHERE id = ?", (vehicle_id,))
+    vehicle = dict(cursor.fetchone())
+    
+    conn.close()
+    return vehicle
+
 def register_vehicle_exit(data):
-    """Registra a saída de um veículo"""
-    if check_driver_has_active_vehicle(data['driver_id']):
-        return None, "Condutor já possui um veículo em uso"
+    try:
+        conn = sqlite3.connect('vehicles.db')
+        cursor = conn.cursor()
+        
+        # Registrar saída
+        cursor.execute('''
+            INSERT INTO vehicle_exits (
+                vehicle_id, driver_name, driver_document, driver_phone,
+                external_checklist, internal_checklist, exit_date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            data['vehicle_id'],
+            data['driver_name'],
+            data['driver_document'],
+            data['driver_phone'],
+            json.dumps(data['external_checklist']),
+            json.dumps(data['internal_checklist']),
+            datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        ))
+        
+        exit_id = cursor.lastrowid
+        
+        # Atualizar status do veículo
+        cursor.execute('''
+            UPDATE vehicles 
+            SET status = 'in_use' 
+            WHERE id = ?
+        ''', (data['vehicle_id'],))
+        
+        conn.commit()
+        
+        # Gerar PDF do checklist
+        generate_checklist_pdf(exit_id, data)
+        
+        return exit_id, "Saída registrada com sucesso!"
+    except Exception as e:
+        return None, f"Erro ao registrar saída: {str(e)}"
+    finally:
+        conn.close()
+
+def generate_checklist_pdf(exit_id, data):
+    # Criar diretório para PDFs se não existir
+    if not os.path.exists('pdfs'):
+        os.makedirs('pdfs')
     
-    db = get_db()
-    cursor = db.cursor()
+    # Nome do arquivo
+    filename = f'pdfs/checklist_{exit_id}.pdf'
     
-    exit_id = f"exit_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    cursor.execute('''
-    INSERT INTO vehicle_exits 
-    (id, driver_id, vehicle_plate, destination, status, data_saida)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ''', (exit_id, data['driver_id'], data['vehicle_plate'], 
-          data['destination'], 'em_uso', datetime.now().isoformat()))
+    # Criar documento
+    doc = SimpleDocTemplate(filename, pagesize=letter)
+    styles = getSampleStyleSheet()
+    elements = []
     
-    db.commit()
-    db.close()
-    return exit_id, "Saída registrada com sucesso"
+    # Título
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=16,
+        spaceAfter=30
+    )
+    elements.append(Paragraph("Checklist de Saída de Veículo", title_style))
+    
+    # Informações do veículo
+    vehicle = get_vehicle_by_id(data['vehicle_id'])
+    elements.append(Paragraph(f"Veículo: {vehicle['plate']} - {vehicle['model']} ({vehicle['year']})", styles['Normal']))
+    elements.append(Paragraph(f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}", styles['Normal']))
+    elements.append(Spacer(1, 20))
+    
+    # Informações do motorista
+    elements.append(Paragraph("Informações do Motorista:", styles['Heading2']))
+    elements.append(Paragraph(f"Nome: {data['driver_name']}", styles['Normal']))
+    elements.append(Paragraph(f"Documento: {data['driver_document']}", styles['Normal']))
+    elements.append(Paragraph(f"Telefone: {data['driver_phone']}", styles['Normal']))
+    elements.append(Spacer(1, 20))
+    
+    # Checklist externo
+    elements.append(Paragraph("Checklist Externo:", styles['Heading2']))
+    external_data = [['Item', 'Status']]
+    for item, value in data['external_checklist'].items():
+        if item != 'observacoes_externas':
+            external_data.append([item.replace('_', ' ').title(), 'OK' if value else 'NOK'])
+    
+    external_table = Table(external_data)
+    external_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -1), 10),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    elements.append(external_table)
+    
+    if data['external_checklist']['observacoes_externas']:
+        elements.append(Spacer(1, 10))
+        elements.append(Paragraph("Observações Externas:", styles['Heading3']))
+        elements.append(Paragraph(data['external_checklist']['observacoes_externas'], styles['Normal']))
+    
+    elements.append(Spacer(1, 20))
+    
+    # Checklist interno
+    elements.append(Paragraph("Checklist Interno:", styles['Heading2']))
+    internal_data = [['Item', 'Status']]
+    for item, value in data['internal_checklist'].items():
+        if item != 'observacoes_internas':
+            internal_data.append([item.replace('_', ' ').title(), 'OK' if value else 'NOK'])
+    
+    internal_table = Table(internal_data)
+    internal_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -1), 10),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    elements.append(internal_table)
+    
+    if data['internal_checklist']['observacoes_internas']:
+        elements.append(Spacer(1, 10))
+        elements.append(Paragraph("Observações Internas:", styles['Heading3']))
+        elements.append(Paragraph(data['internal_checklist']['observacoes_internas'], styles['Normal']))
+    
+    # Assinatura
+    elements.append(Spacer(1, 50))
+    elements.append(Paragraph("Assinatura do Motorista:", styles['Heading3']))
+    elements.append(Paragraph("_" * 50, styles['Normal']))
+    
+    # Gerar PDF
+    doc.build(elements)
+    
+    return filename
+
+def get_vehicle_by_id(vehicle_id):
+    try:
+        conn = sqlite3.connect('vehicles.db')
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT * FROM vehicles WHERE id = ?', (vehicle_id,))
+        vehicle = cursor.fetchone()
+        
+        if vehicle:
+            return {
+                'id': vehicle[0],
+                'plate': vehicle[1],
+                'type': vehicle[2],
+                'model': vehicle[3],
+                'year': vehicle[4],
+                'status': vehicle[5]
+            }
+        return None
+    except Exception as e:
+        print(f"Erro ao buscar veículo: {str(e)}")
+        return None
+    finally:
+        conn.close()
 
 def get_active_exits():
     """Retorna todas as saídas ativas"""
@@ -278,4 +497,40 @@ def get_driver_statistics():
         'most_exits': [dict(row) for row in most_exits],
         'most_km': [dict(row) for row in most_km],
         'most_time': [dict(row) for row in most_time]
-    } 
+    }
+
+def create_tables():
+    """Cria as tabelas necessárias no banco de dados"""
+    conn = sqlite3.connect('vehicles.db')
+    cursor = conn.cursor()
+    
+    # Tabela de veículos
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS vehicles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plate TEXT NOT NULL UNIQUE,
+            type TEXT NOT NULL,
+            model TEXT NOT NULL,
+            year INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'available'
+        )
+    ''')
+    
+    # Tabela de saídas de veículos
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS vehicle_exits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vehicle_id INTEGER NOT NULL,
+            driver_name TEXT NOT NULL,
+            driver_document TEXT NOT NULL,
+            driver_phone TEXT NOT NULL,
+            external_checklist TEXT NOT NULL,
+            internal_checklist TEXT NOT NULL,
+            exit_date TEXT NOT NULL,
+            return_date TEXT,
+            FOREIGN KEY (vehicle_id) REFERENCES vehicles (id)
+        )
+    ''')
+    
+    conn.commit()
+    conn.close() 
