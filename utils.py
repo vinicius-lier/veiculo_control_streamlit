@@ -1,0 +1,33 @@
+import streamlit as st
+from datetime import datetime
+import os
+
+def save_uploaded_file(uploaded_file, folder="imagens/avarias"):
+    """Salva um arquivo enviado pelo usuário"""
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+    
+    file_path = os.path.join(folder, uploaded_file.name)
+    with open(file_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    return file_path
+
+def format_datetime(dt_str):
+    """Formata uma string de data/hora para exibição"""
+    dt = datetime.fromisoformat(dt_str)
+    return dt.strftime("%d/%m/%Y %H:%M")
+
+def init_session_state():
+    """Inicializa as variáveis de sessão"""
+    if 'logged_in' not in st.session_state:
+        st.session_state.logged_in = False
+    if 'username' not in st.session_state:
+        st.session_state.username = None
+    if 'user_role' not in st.session_state:
+        st.session_state.user_role = None
+
+def check_login():
+    """Verifica se o usuário está logado"""
+    if not st.session_state.logged_in:
+        st.error("Por favor, faça login para acessar esta página")
+        st.stop() 
