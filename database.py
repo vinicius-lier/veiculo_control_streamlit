@@ -1,125 +1,221 @@
-import redis
-import json
+import sqlite3
 import bcrypt
 from datetime import datetime
 import os
 
-# Conexão com Redis Upstash
-redis_client = redis.Redis(
-    host='evolved-garfish-57315.upstash.io',
-    port=6379,
-    password='Ad_jAAIncDFmZDE3YzI5N2M1NDU0NzE5YWVlOTQwOWE1ZTI4Yjk3Y3AxNTczMTU',
-    ssl=True,
-    decode_responses=True
-)
+# Conexão com SQLite
+def get_db():
+    db = sqlite3.connect('vehicles.db')
+    db.row_factory = sqlite3.Row
+    return db
 
 def init_db():
-    """Inicializa o banco de dados com usuário admin se não existir"""
-    if not redis_client.exists('users'):
+    """Inicializa o banco de dados com as tabelas necessárias"""
+    db = get_db()
+    cursor = db.cursor()
+    
+    # Criar tabela de usuários
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS users (
+        username TEXT PRIMARY KEY,
+        password TEXT NOT NULL,
+        role TEXT NOT NULL
+    )
+    ''')
+    
+    # Criar tabela de condutores
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS drivers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        document TEXT NOT NULL,
+        status TEXT NOT NULL,
+        data_registro TEXT NOT NULL
+    )
+    ''')
+    
+    # Criar tabela de saídas de veículos
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS vehicle_exits (
+        id TEXT PRIMARY KEY,
+        driver_id TEXT NOT NULL,
+        vehicle_plate TEXT NOT NULL,
+        destination TEXT NOT NULL,
+        status TEXT NOT NULL,
+        data_saida TEXT NOT NULL,
+        data_retorno TEXT,
+        observations TEXT,
+        FOREIGN KEY (driver_id) REFERENCES drivers (id)
+    )
+    ''')
+    
+    # Verificar se existe usuário admin
+    cursor.execute('SELECT * FROM users WHERE username = ?', ('admin',))
+    if not cursor.fetchone():
         # Senha padrão: admin123
         hashed = bcrypt.hashpw('admin123'.encode('utf-8'), bcrypt.gensalt())
-        admin_user = {
-            'username': 'admin',
-            'password': hashed.decode('utf-8'),
-            'role': 'admin'
-        }
-        redis_client.hset('users', 'admin', json.dumps(admin_user))
+        cursor.execute('INSERT INTO users (username, password, role) VALUES (?, ?, ?)',
+                      ('admin', hashed.decode('utf-8'), 'admin'))
+    
+    db.commit()
+    db.close()
 
 def create_user(username, password):
     """Cria um novo usuário"""
-    if redis_client.hexists('users', username):
+    db = get_db()
+    cursor = db.cursor()
+    
+    cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
+    if cursor.fetchone():
+        db.close()
         return False, "Usuário já existe"
     
     hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-    user = {
-        'username': username,
-        'password': hashed.decode('utf-8'),
-        'role': 'user'
-    }
-    redis_client.hset('users', username, json.dumps(user))
+    cursor.execute('INSERT INTO users (username, password, role) VALUES (?, ?, ?)',
+                  (username, hashed.decode('utf-8'), 'user'))
+    
+    db.commit()
+    db.close()
     return True, "Usuário criado com sucesso"
 
 def verify_user(username, password):
     """Verifica as credenciais do usuário"""
-    user_data = redis_client.hget('users', username)
-    if not user_data:
+    db = get_db()
+    cursor = db.cursor()
+    
+    cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
+    user = cursor.fetchone()
+    db.close()
+    
+    if not user:
         return False, None
     
-    user = json.loads(user_data)
     if bcrypt.checkpw(password.encode('utf-8'), user['password'].encode('utf-8')):
-        return True, user
+        return True, dict(user)
     return False, None
 
 def register_driver(driver_data):
     """Registra um novo condutor"""
+    db = get_db()
+    cursor = db.cursor()
+    
     driver_id = f"driver_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    driver_data['status'] = 'ativo'
-    driver_data['data_registro'] = datetime.now().isoformat()
-    redis_client.hset('drivers', driver_id, json.dumps(driver_data))
+    cursor.execute('''
+    INSERT INTO drivers (id, name, document, status, data_registro)
+    VALUES (?, ?, ?, ?, ?)
+    ''', (driver_id, driver_data['name'], driver_data['document'], 
+          'ativo', datetime.now().isoformat()))
+    
+    db.commit()
+    db.close()
     return driver_id
 
 def get_driver(driver_id):
     """Retorna os dados de um condutor"""
-    driver_data = redis_client.hget('drivers', driver_id)
-    return json.loads(driver_data) if driver_data else None
+    db = get_db()
+    cursor = db.cursor()
+    
+    cursor.execute('SELECT * FROM drivers WHERE id = ?', (driver_id,))
+    driver = cursor.fetchone()
+    db.close()
+    
+    return dict(driver) if driver else None
 
 def get_all_drivers():
     """Retorna todos os condutores"""
-    drivers = redis_client.hgetall('drivers')
-    return {k: json.loads(v) for k, v in drivers.items()}
+    db = get_db()
+    cursor = db.cursor()
+    
+    cursor.execute('SELECT * FROM drivers')
+    drivers = cursor.fetchall()
+    db.close()
+    
+    return {row['id']: dict(row) for row in drivers}
 
 def check_driver_has_active_vehicle(driver_id):
     """Verifica se o condutor tem veículo em uso"""
-    exits = redis_client.hgetall('vehicle_exits')
-    for exit_data in exits.values():
-        exit_data = json.loads(exit_data)
-        if exit_data['driver_id'] == driver_id and exit_data['status'] == 'em_uso':
-            return True
-    return False
+    db = get_db()
+    cursor = db.cursor()
+    
+    cursor.execute('''
+    SELECT * FROM vehicle_exits 
+    WHERE driver_id = ? AND status = 'em_uso'
+    ''', (driver_id,))
+    
+    has_active = bool(cursor.fetchone())
+    db.close()
+    return has_active
 
 def register_vehicle_exit(data):
     """Registra a saída de um veículo"""
-    # Verificar se o condutor tem veículo em uso
     if check_driver_has_active_vehicle(data['driver_id']):
         return None, "Condutor já possui um veículo em uso"
     
+    db = get_db()
+    cursor = db.cursor()
+    
     exit_id = f"exit_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    data['status'] = 'em_uso'
-    data['data_saida'] = datetime.now().isoformat()
-    redis_client.hset('vehicle_exits', exit_id, json.dumps(data))
+    cursor.execute('''
+    INSERT INTO vehicle_exits 
+    (id, driver_id, vehicle_plate, destination, status, data_saida)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ''', (exit_id, data['driver_id'], data['vehicle_plate'], 
+          data['destination'], 'em_uso', datetime.now().isoformat()))
+    
+    db.commit()
+    db.close()
     return exit_id, "Saída registrada com sucesso"
 
 def get_active_exits():
     """Retorna todas as saídas ativas"""
-    exits = redis_client.hgetall('vehicle_exits')
-    return {k: json.loads(v) for k, v in exits.items() if json.loads(v)['status'] == 'em_uso'}
+    db = get_db()
+    cursor = db.cursor()
+    
+    cursor.execute('SELECT * FROM vehicle_exits WHERE status = ?', ('em_uso',))
+    exits = cursor.fetchall()
+    db.close()
+    
+    return {row['id']: dict(row) for row in exits}
 
 def register_vehicle_return(exit_id, data):
     """Registra o retorno de um veículo"""
-    exit_data = redis_client.hget('vehicle_exits', exit_id)
+    db = get_db()
+    cursor = db.cursor()
+    
+    cursor.execute('SELECT * FROM vehicle_exits WHERE id = ?', (exit_id,))
+    exit_data = cursor.fetchone()
+    
     if not exit_data:
+        db.close()
         return False, "Saída não encontrada"
     
-    exit_data = json.loads(exit_data)
     if exit_data['status'] != 'em_uso':
+        db.close()
         return False, "Veículo já retornado"
     
-    exit_data.update(data)
-    exit_data['status'] = 'retornado'
-    exit_data['data_retorno'] = datetime.now().isoformat()
-    redis_client.hset('vehicle_exits', exit_id, json.dumps(exit_data))
+    cursor.execute('''
+    UPDATE vehicle_exits 
+    SET status = ?, data_retorno = ?, observations = ?
+    WHERE id = ?
+    ''', ('retornado', datetime.now().isoformat(), 
+          data.get('observations', ''), exit_id))
+    
+    db.commit()
+    db.close()
     return True, "Retorno registrado com sucesso"
 
 def get_weekly_report():
     """Retorna os registros dos últimos 7 dias"""
-    exits = redis_client.hgetall('vehicle_exits')
-    all_exits = {k: json.loads(v) for k, v in exits.items()}
+    db = get_db()
+    cursor = db.cursor()
     
-    # Filtrar últimos 7 dias
-    seven_days_ago = datetime.now().timestamp() - (7 * 24 * 60 * 60)
-    recent_exits = {
-        k: v for k, v in all_exits.items()
-        if datetime.fromisoformat(v['data_saida']).timestamp() > seven_days_ago
-    }
+    seven_days_ago = (datetime.now().timestamp() - (7 * 24 * 60 * 60))
+    cursor.execute('''
+    SELECT * FROM vehicle_exits 
+    WHERE datetime(data_saida) > datetime(?)
+    ''', (datetime.fromtimestamp(seven_days_ago).isoformat(),))
     
-    return recent_exits 
+    exits = cursor.fetchall()
+    db.close()
+    
+    return {row['id']: dict(row) for row in exits} 
