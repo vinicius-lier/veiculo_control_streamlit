@@ -306,7 +306,7 @@ def register_driver(driver_data):
         cursor.execute('''
         INSERT INTO drivers (name, document, phone, email, license_number, license_category, license_expiration, status, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (driver_data['nome'], driver_data['cnh'], 
+        ''', (driver_data['nome'], driver_data['documento'], 
               driver_data.get('telefone', ''), driver_data.get('email', ''),
               driver_data['cnh'], driver_data['categoria'],
               driver_data['validade'], 'ativo', datetime.now().isoformat()))
@@ -332,7 +332,22 @@ def get_driver(driver_id):
     driver = cursor.fetchone()
     db.close()
     
-    return dict(driver) if driver else None
+    if driver:
+        # Converter para dicionário com nomes em português
+        return {
+            'id': driver['id'],
+            'nome': driver['name'],
+            'documento': driver['document'],
+            'telefone': driver['phone'],
+            'email': driver['email'],
+            'cnh': driver['license_number'],
+            'categoria': driver['license_category'],
+            'validade': driver['license_expiration'],
+            'status': driver['status'],
+            'criado_em': driver['created_at'],
+            'atualizado_em': driver['updated_at']
+        }
+    return None
 
 def get_all_drivers():
     """Retorna todos os condutores"""
@@ -343,7 +358,20 @@ def get_all_drivers():
     drivers = cursor.fetchall()
     db.close()
     
-    return {row['id']: dict(row) for row in drivers}
+    # Converter para dicionário com nomes em português
+    return {row['id']: {
+        'id': row['id'],
+        'nome': row['name'],
+        'documento': row['document'],
+        'telefone': row['phone'],
+        'email': row['email'],
+        'cnh': row['license_number'],
+        'categoria': row['license_category'],
+        'validade': row['license_expiration'],
+        'status': row['status'],
+        'criado_em': row['created_at'],
+        'atualizado_em': row['updated_at']
+    } for row in drivers}
 
 def check_driver_has_active_vehicle(driver_id):
     """Verifica se o condutor tem veículo em uso"""
@@ -494,9 +522,9 @@ def generate_checklist_pdf(exit_id, data):
     # Informações do motorista
     driver = get_driver(data['driver_id'])
     elements.append(Paragraph("Informações do Motorista:", styles['Heading2']))
-    elements.append(Paragraph(f"Nome: {driver['name']}", styles['Normal']))
-    elements.append(Paragraph(f"Documento: {driver['document']}", styles['Normal']))
-    elements.append(Paragraph(f"Telefone: {driver.get('phone', 'Não informado')}", styles['Normal']))
+    elements.append(Paragraph(f"Nome: {driver['nome']}", styles['Normal']))
+    elements.append(Paragraph(f"Documento: {driver['documento']}", styles['Normal']))
+    elements.append(Paragraph(f"Telefone: {driver.get('telefone', 'Não informado')}", styles['Normal']))
     elements.append(Spacer(1, 20))
     
     # Checklist externo
@@ -669,7 +697,7 @@ def get_driver_statistics():
     
     # Motorista com mais saídas
     cursor.execute('''
-    SELECT d.id, d.name, COUNT(*) as total_saidas
+    SELECT d.id, d.name as nome, COUNT(*) as total_saidas
     FROM drivers d
     JOIN vehicle_exits v ON d.id = v.driver_id
     GROUP BY d.id, d.name
@@ -679,7 +707,7 @@ def get_driver_statistics():
     
     # Motorista com maior quilometragem
     cursor.execute('''
-    SELECT d.id, d.name, SUM(v.final_odometer - v.initial_odometer) as total_km
+    SELECT d.id, d.name as nome, SUM(v.final_odometer - v.initial_odometer) as total_km
     FROM drivers d
     JOIN vehicle_exits v ON d.id = v.driver_id
     WHERE v.final_odometer IS NOT NULL AND v.initial_odometer IS NOT NULL
@@ -690,7 +718,7 @@ def get_driver_statistics():
     
     # Motorista com maior tempo de uso
     cursor.execute('''
-    SELECT d.id, d.name, 
+    SELECT d.id, d.name as nome, 
            SUM(CAST((julianday(v.actual_return_date) - julianday(v.exit_date)) * 24 AS INTEGER)) as total_horas
     FROM drivers d
     JOIN vehicle_exits v ON d.id = v.driver_id
@@ -703,7 +731,7 @@ def get_driver_statistics():
     db.close()
     
     return {
-        'most_exits': [dict(row) for row in most_exits],
-        'most_km': [dict(row) for row in most_km],
-        'most_time': [dict(row) for row in most_time]
+        'mais_saidas': [dict(row) for row in most_exits],
+        'mais_km': [dict(row) for row in most_km],
+        'mais_tempo': [dict(row) for row in most_time]
     } 
