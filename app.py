@@ -73,6 +73,8 @@ if not st.session_state.logged_in:
         st.subheader("Criar Nova Conta")
         with st.form("register_form"):
             new_username = st.text_input("Nome de usuário")
+            new_name = st.text_input("Nome completo")
+            new_email = st.text_input("E-mail (opcional)")
             new_password = st.text_input("Senha", type="password")
             confirm_password = st.text_input("Confirmar senha", type="password")
             col1, col2 = st.columns([3, 1])
@@ -86,7 +88,7 @@ if not st.session_state.logged_in:
                 if new_password != confirm_password:
                     st.error("As senhas não coincidem")
                 else:
-                    success, message = create_user(new_username, new_password)
+                    success, message = create_user(new_username, new_password, new_name, new_email)
                     if success:
                         st.success(message)
                         st.session_state.show_register_form = False

@@ -34,23 +34,31 @@ def init_db():
     # Criar tabela de usuários
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS users (
-        username TEXT PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
-        role TEXT NOT NULL
+        role TEXT NOT NULL,
+        name TEXT NOT NULL,
+        email TEXT,
+        created_at TEXT NOT NULL,
+        last_login TEXT
     )
     ''')
     
     # Criar tabela de condutores
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS drivers (
-        id TEXT PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         document TEXT NOT NULL,
-        status TEXT NOT NULL,
-        data_registro TEXT NOT NULL,
-        categoria TEXT NOT NULL,
-        validade TEXT NOT NULL,
-        foto_cnh TEXT NOT NULL
+        phone TEXT,
+        email TEXT,
+        license_number TEXT NOT NULL,
+        license_category TEXT NOT NULL,
+        license_expiration TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL,
+        updated_at TEXT
     )
     ''')
     
@@ -62,7 +70,11 @@ def init_db():
         type TEXT NOT NULL,
         model TEXT NOT NULL,
         year INTEGER NOT NULL,
-        status TEXT DEFAULT 'available'
+        color TEXT,
+        chassis_number TEXT,
+        status TEXT DEFAULT 'available',
+        created_at TEXT NOT NULL,
+        updated_at TEXT
     )
     ''')
     
@@ -70,18 +82,56 @@ def init_db():
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS vehicle_exits (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        driver_id INTEGER NOT NULL,
         vehicle_id INTEGER NOT NULL,
-        data_saida TEXT NOT NULL,
-        data_retorno TEXT,
-        odometro_inicial INTEGER,
-        odometro_final INTEGER,
-        quilometragem INTEGER,
+        driver_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        exit_date TEXT NOT NULL,
+        expected_return_date TEXT,
+        actual_return_date TEXT,
+        initial_odometer INTEGER,
+        final_odometer INTEGER,
+        destination TEXT,
+        purpose TEXT,
+        status TEXT NOT NULL DEFAULT 'in_progress',
+        external_checklist TEXT,
+        internal_checklist TEXT,
         observations TEXT,
-        checklist_external TEXT,
-        checklist_internal TEXT,
-        checklist_damages TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        FOREIGN KEY (vehicle_id) REFERENCES vehicles (id),
         FOREIGN KEY (driver_id) REFERENCES drivers (id),
+        FOREIGN KEY (user_id) REFERENCES users (id)
+    )
+    ''')
+    
+    # Criar tabela de manutenções
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS maintenance (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        vehicle_id INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        description TEXT NOT NULL,
+        cost REAL,
+        date TEXT NOT NULL,
+        provider TEXT,
+        status TEXT NOT NULL DEFAULT 'scheduled',
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        FOREIGN KEY (vehicle_id) REFERENCES vehicles (id)
+    )
+    ''')
+    
+    # Criar tabela de abastecimentos
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS fuel_consumption (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        vehicle_id INTEGER NOT NULL,
+        date TEXT NOT NULL,
+        liters REAL NOT NULL,
+        cost REAL NOT NULL,
+        odometer INTEGER NOT NULL,
+        gas_station TEXT,
+        created_at TEXT NOT NULL,
         FOREIGN KEY (vehicle_id) REFERENCES vehicles (id)
     )
     ''')
@@ -91,13 +141,15 @@ def init_db():
     if not cursor.fetchone():
         # Senha padrão: admin123
         hashed = hash_password('admin123')
-        cursor.execute('INSERT INTO users (username, password, role) VALUES (?, ?, ?)',
-                      ('admin', hashed, 'admin'))
+        cursor.execute('''
+        INSERT INTO users (username, password, role, name, created_at) 
+        VALUES (?, ?, ?, ?, ?)
+        ''', ('admin', hashed, 'admin', 'Administrador', datetime.now().isoformat()))
     
     db.commit()
     db.close()
 
-def create_user(username, password):
+def create_user(username, password, name, email=None):
     """Cria um novo usuário"""
     db = get_db()
     cursor = db.cursor()
@@ -108,8 +160,10 @@ def create_user(username, password):
         return False, "Usuário já existe"
     
     hashed = hash_password(password)
-    cursor.execute('INSERT INTO users (username, password, role) VALUES (?, ?, ?)',
-                  (username, hashed, 'user'))
+    cursor.execute('''
+    INSERT INTO users (username, password, role, name, email, created_at) 
+    VALUES (?, ?, ?, ?, ?, ?)
+    ''', (username, hashed, 'user', name, email, datetime.now().isoformat()))
     
     db.commit()
     db.close()
@@ -122,13 +176,22 @@ def verify_user(username, password):
     
     cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
     user = cursor.fetchone()
-    db.close()
     
     if not user:
+        db.close()
         return False, None
     
     if verify_password(password, user['password']):
-        return True, dict(user)
+        # Atualiza o último login
+        cursor.execute('UPDATE users SET last_login = ? WHERE id = ?', 
+                      (datetime.now().isoformat(), user['id']))
+        db.commit()
+        
+        user_dict = dict(user)
+        db.close()
+        return True, user_dict
+    
+    db.close()
     return False, None
 
 def register_driver(driver_data):
