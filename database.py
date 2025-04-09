@@ -63,6 +63,7 @@ def init_db():
         license_number TEXT NOT NULL,
         license_category TEXT NOT NULL,
         license_expiration TEXT NOT NULL,
+        license_photo_path TEXT,
         status TEXT NOT NULL DEFAULT 'active',
         created_at TEXT NOT NULL,
         updated_at TEXT
@@ -143,21 +144,46 @@ def init_db():
     )
     ''')
     
-    # Verificar se existe usuário admin
-    cursor.execute('SELECT * FROM users WHERE username = ?', ('admin',))
+    # Verificar se existe usuário MASTER
+    cursor.execute('SELECT * FROM users WHERE username = ?', ('master',))
     if not cursor.fetchone():
-        # Senha padrão: admin123
-        hashed = hash_password('admin123')
+        # Senha: V1n1c1u5@#
+        hashed = hash_password('V1n1c1u5@#')
         cursor.execute('''
         INSERT INTO users (username, password, role, name, created_at) 
         VALUES (?, ?, ?, ?, ?)
-        ''', ('admin', hashed, 'admin', 'Administrador', datetime.now().isoformat()))
+        ''', ('master', hashed, 'master', 'Administrador Master', datetime.now().isoformat()))
+    
+    # Verificar se existe usuário Vinicius
+    cursor.execute('SELECT * FROM users WHERE username = ?', ('vinicius',))
+    if not cursor.fetchone():
+        # Senha: V1n1c1u5@#
+        hashed = hash_password('V1n1c1u5@#')
+        cursor.execute('''
+        INSERT INTO users (username, password, role, name, created_at) 
+        VALUES (?, ?, ?, ?, ?)
+        ''', ('vinicius', hashed, 'user', 'Vinicius', datetime.now().isoformat()))
     
     db.commit()
     db.close()
 
-def create_user(username, password, name, email=None):
-    """Cria um novo usuário"""
+def create_user(username, password, name, email=None, current_user=None):
+    """
+    Cria um novo usuário. Apenas o usuário MASTER pode criar novos usuários.
+    
+    Args:
+        username (str): Nome de usuário
+        password (str): Senha
+        name (str): Nome completo
+        email (str, optional): Email
+        current_user (dict): Usuário atual que está tentando criar o novo usuário
+        
+    Returns:
+        tuple: (bool, str) - (sucesso, mensagem)
+    """
+    if not current_user or current_user.get('role') != 'master':
+        return False, "Apenas o usuário MASTER pode criar novos usuários"
+        
     db = get_db()
     cursor = db.cursor()
     
@@ -211,7 +237,7 @@ def register_driver(driver_data):
             - document: Número da CNH
             - license_category: Categoria da CNH
             - license_expiration: Data de validade da CNH
-            - license_photo_path: Caminho da foto da CNH (opcional)
+            - license_photo_path: Caminho da foto/PDF da CNH (opcional)
             - phone: Telefone (opcional)
             - email: Email (opcional)
             - status: Status do condutor (default: 'active')
@@ -226,14 +252,16 @@ def register_driver(driver_data):
         cursor.execute("""
             INSERT INTO drivers (
                 name, document, license_category, license_expiration,
-                license_photo_path, status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                license_photo_path, phone, email, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
         """, (
             driver_data['nome'],
             driver_data['cnh'],
             driver_data['categoria'],
             driver_data['validade'],
             driver_data.get('foto_cnh'),
+            driver_data.get('phone'),
+            driver_data.get('email'),
             'active'
         ))
         
@@ -378,6 +406,7 @@ def register_vehicle_exit(vehicle_id, driver_id, user_id, exit_data):
             - external_checklist: lista de verificação externa
             - internal_checklist: lista de verificação interna
             - observations: observações
+            - fuel_level: nível de combustível
             
     Returns:
         int: ID do registro de saída criado
@@ -386,13 +415,31 @@ def register_vehicle_exit(vehicle_id, driver_id, user_id, exit_data):
         conn = get_db()
         cursor = conn.cursor()
         
+        # Verificar se o condutor já tem um veículo ativo
+        cursor.execute("""
+            SELECT v.plate, v.model 
+            FROM vehicle_exits ve 
+            JOIN vehicles v ON v.id = ve.vehicle_id 
+            WHERE ve.driver_id = ? AND ve.status = 'in_progress'
+        """, (driver_id,))
+        
+        active_vehicle = cursor.fetchone()
+        if active_vehicle:
+            raise Exception(f"Condutor já possui um veículo ativo: {active_vehicle['plate']} - {active_vehicle['model']}")
+        
+        # Verificar se o veículo está disponível
+        cursor.execute("SELECT status FROM vehicles WHERE id = ?", (vehicle_id,))
+        vehicle = cursor.fetchone()
+        if not vehicle or vehicle['status'] != 'available':
+            raise Exception("Veículo não está disponível para saída")
+        
         # Insere o registro de saída
         cursor.execute("""
             INSERT INTO vehicle_exits (
                 vehicle_id, driver_id, user_id, exit_date, expected_return_date,
                 initial_odometer, destination, purpose, external_checklist,
                 internal_checklist, observations, status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'))
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_progress', datetime('now'))
         """, (
             vehicle_id, driver_id, user_id,
             exit_data['exit_date'], exit_data['expected_return_date'],
@@ -412,6 +459,19 @@ def register_vehicle_exit(vehicle_id, driver_id, user_id, exit_data):
         """, (vehicle_id,))
         
         conn.commit()
+        
+        # Gera o documento de inspeção
+        generate_checklist_pdf(exit_id, {
+            'vehicle_id': vehicle_id,
+            'driver_id': driver_id,
+            'exit_date': exit_data['exit_date'],
+            'initial_odometer': exit_data['initial_odometer'],
+            'fuel_level': exit_data.get('fuel_level', 'Não informado'),
+            'external_checklist': exit_data['external_checklist'],
+            'internal_checklist': exit_data['internal_checklist'],
+            'observations': exit_data.get('observations', '')
+        })
+        
         return exit_id
         
     except Exception as e:
@@ -421,6 +481,13 @@ def register_vehicle_exit(vehicle_id, driver_id, user_id, exit_data):
         conn.close()
 
 def generate_checklist_pdf(exit_id, data):
+    """
+    Gera um PDF com o checklist de saída/retorno do veículo.
+    
+    Args:
+        exit_id (int): ID do registro de saída
+        data (dict): Dicionário com os dados do checklist
+    """
     # Criar diretório para PDFs se não existir
     if not os.path.exists('pdfs'):
         os.makedirs('pdfs')
@@ -440,12 +507,12 @@ def generate_checklist_pdf(exit_id, data):
         fontSize=16,
         spaceAfter=30
     )
-    elements.append(Paragraph("Checklist de Saída de Veículo", title_style))
+    elements.append(Paragraph("Checklist de Inspeção de Veículo", title_style))
     
     # Informações do veículo
     vehicle = get_vehicle_by_id(data['vehicle_id'])
     elements.append(Paragraph(f"Veículo: {vehicle['plate']} - {vehicle['model']} ({vehicle['year']})", styles['Normal']))
-    elements.append(Paragraph(f"Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}", styles['Normal']))
+    elements.append(Paragraph(f"Data: {data['exit_date']}", styles['Normal']))
     elements.append(Spacer(1, 20))
     
     # Informações do motorista
@@ -454,6 +521,15 @@ def generate_checklist_pdf(exit_id, data):
     elements.append(Paragraph(f"Nome: {driver['name']}", styles['Normal']))
     elements.append(Paragraph(f"Documento: {driver['document']}", styles['Normal']))
     elements.append(Paragraph(f"Telefone: {driver.get('phone', 'Não informado')}", styles['Normal']))
+    elements.append(Spacer(1, 20))
+    
+    # Quilometragem e combustível
+    elements.append(Paragraph("Quilometragem e Combustível:", styles['Heading2']))
+    if 'is_return' in data:
+        elements.append(Paragraph(f"Quilometragem Final: {data['final_odometer']} km", styles['Normal']))
+    else:
+        elements.append(Paragraph(f"Quilometragem Inicial: {data['initial_odometer']} km", styles['Normal']))
+    elements.append(Paragraph(f"Nível de Combustível: {data['fuel_level']}", styles['Normal']))
     elements.append(Spacer(1, 20))
     
     # Checklist externo
@@ -514,6 +590,12 @@ def generate_checklist_pdf(exit_id, data):
         elements.append(Paragraph("Observações Internas:", styles['Heading3']))
         elements.append(Paragraph(data['internal_checklist']['observacoes_internas'], styles['Normal']))
     
+    # Observações gerais
+    if data.get('observations'):
+        elements.append(Spacer(1, 20))
+        elements.append(Paragraph("Observações Gerais:", styles['Heading2']))
+        elements.append(Paragraph(data['observations'], styles['Normal']))
+    
     # Assinatura
     elements.append(Spacer(1, 50))
     elements.append(Paragraph("Assinatura do Motorista:", styles['Heading3']))
@@ -570,7 +652,11 @@ def register_vehicle_return(exit_id, return_data):
         return_data (dict): Dicionário com os dados do retorno contendo:
             - actual_return_date: data/hora efetiva do retorno
             - final_odometer: quilometragem final
+            - fuel_level: nível de combustível
+            - external_checklist: lista de verificação externa
+            - internal_checklist: lista de verificação interna
             - observations: observações do retorno
+            - checklist_file: arquivo do checklist de saída
             
     Returns:
         bool: True se o retorno foi registrado com sucesso
@@ -592,6 +678,8 @@ def register_vehicle_return(exit_id, return_data):
             UPDATE vehicle_exits 
             SET actual_return_date = ?,
                 final_odometer = ?,
+                external_checklist = ?,
+                internal_checklist = ?,
                 observations = CASE 
                     WHEN observations IS NULL OR observations = '' 
                     THEN ? 
@@ -603,7 +691,9 @@ def register_vehicle_return(exit_id, return_data):
         """, (
             return_data['actual_return_date'],
             return_data['final_odometer'],
-            return_data.get('observations', ''),
+            json.dumps(return_data['external_checklist']),
+            json.dumps(return_data['internal_checklist']),
+            'Observações do retorno: ' + return_data.get('observations', ''),
             'Observações do retorno: ' + return_data.get('observations', ''),
             exit_id
         ))
@@ -617,6 +707,19 @@ def register_vehicle_return(exit_id, return_data):
         """, (vehicle_id,))
         
         conn.commit()
+        
+        # Gera o documento de inspeção de retorno
+        generate_checklist_pdf(exit_id, {
+            'vehicle_id': vehicle_id,
+            'exit_date': return_data['actual_return_date'],
+            'final_odometer': return_data['final_odometer'],
+            'fuel_level': return_data.get('fuel_level', 'Não informado'),
+            'external_checklist': return_data['external_checklist'],
+            'internal_checklist': return_data['internal_checklist'],
+            'observations': return_data.get('observations', ''),
+            'is_return': True
+        })
+        
         return True
         
     except Exception as e:

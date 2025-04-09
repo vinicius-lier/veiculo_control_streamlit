@@ -1,15 +1,26 @@
 import streamlit as st
+import os
 from database import verify_user, init_db, create_user
 from utils import check_login
 from redis_client import save_data, get_data
+import base64
 
 # Configuração da página
 st.set_page_config(
     page_title="Sistema de Gestão de Veículos",
     page_icon="🚗",
-    layout="wide",
-    initial_sidebar_state="collapsed"
+    layout="wide"
 )
+
+# Função para carregar a logo
+def load_logo():
+    logo_path = "assets/logo.png"
+    if os.path.exists(logo_path):
+        with open(logo_path, "rb") as f:
+            data = f.read()
+            b64 = base64.b64encode(data).decode()
+            return f"data:image/png;base64,{b64}"
+    return None
 
 # Inicializa o banco de dados
 init_db()
@@ -50,81 +61,93 @@ st.title("Sistema de Gestão de Veículos")
 
 # Se não estiver logado, mostra o formulário de login
 if not st.session_state.logged_in:
-    # Formulário de login
-    with st.form("login_form"):
-        username = st.text_input("Usuário")
-        password = st.text_input("Senha", type="password")
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            submit = st.form_submit_button("Entrar")
-        with col2:
-            if st.form_submit_button("Criar Conta"):
-                toggle_register_form()
-        
-        if submit:
-            if login(username, password):
-                st.rerun()
-            else:
-                st.error("Usuário ou senha inválidos")
+    # Layout do login
+    col1, col2, col3 = st.columns([1, 2, 1])
     
-    # Formulário de cadastro
-    if st.session_state.show_register_form:
-        st.markdown("---")
-        st.subheader("Criar Nova Conta")
-        with st.form("register_form"):
-            new_username = st.text_input("Nome de usuário")
-            new_name = st.text_input("Nome completo")
-            new_email = st.text_input("E-mail (opcional)")
-            new_password = st.text_input("Senha", type="password")
-            confirm_password = st.text_input("Confirmar senha", type="password")
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                register = st.form_submit_button("Cadastrar")
-            with col2:
-                if st.form_submit_button("Cancelar"):
-                    toggle_register_form()
+    with col2:
+        # Logo
+        logo = load_logo()
+        if logo:
+            st.image(logo, width=200)
+        
+        st.title("Login")
+        
+        with st.form("login_form"):
+            username = st.text_input("Usuário")
+            password = st.text_input("Senha", type="password")
+            submit = st.form_submit_button("Entrar")
             
-            if register:
-                if new_password != confirm_password:
-                    st.error("As senhas não coincidem")
+            if submit:
+                success, user = verify_user(username, password)
+                if success:
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
+                    st.session_state.role = user['role']
+                    st.experimental_rerun()
                 else:
-                    success, message = create_user(new_username, new_password, new_name, new_email)
+                    st.error("Usuário ou senha inválidos")
+        
+        # Botão de cadastro (apenas visível para o MASTER)
+        if st.session_state.get('role') == 'master':
+            if st.button("Cadastrar Novo Usuário"):
+                st.session_state.show_register = True
+        
+        # Formulário de cadastro
+        if st.session_state.get('show_register'):
+            with st.form("register_form"):
+                st.subheader("Cadastrar Novo Usuário")
+                new_username = st.text_input("Nome de Usuário")
+                new_password = st.text_input("Senha", type="password")
+                new_name = st.text_input("Nome Completo")
+                new_email = st.text_input("Email (opcional)")
+                
+                if st.form_submit_button("Cadastrar"):
+                    success, message = create_user(
+                        new_username, 
+                        new_password, 
+                        new_name, 
+                        new_email,
+                        {'role': st.session_state.role}
+                    )
                     if success:
                         st.success(message)
-                        st.session_state.show_register_form = False
+                        st.session_state.show_register = False
                     else:
                         st.error(message)
 else:
-    # Botões na parte superior
-    col1, col2, col3, col4, col5, col6, col7 = st.columns([1,1,1,1,1,1,1])
+    # Menu principal
+    st.sidebar.title("Menu")
     
-    with col1:
-        if st.button("Dashboard"):
-            st.switch_page("pages/dashboard.py")
+    # Opções do menu
+    menu_option = st.sidebar.radio(
+        "Selecione uma opção:",
+        ["Início", "Gerenciar Condutores", "Gerenciar Veículos", "Registrar Saída", "Registrar Retorno"]
+    )
     
-    with col2:
-        if st.button("Registrar Saída"):
-            st.switch_page("pages/registrar_saida.py")
+    # Logout
+    if st.sidebar.button("Sair"):
+        logout()
     
-    with col3:
-        if st.button("Registrar Retorno"):
-            st.switch_page("pages/registrar_retorno.py")
-    
-    with col4:
-        if st.button("Gerenciar Veículos"):
-            st.switch_page("pages/gerenciar_veiculos.py")
-    
-    with col5:
-        if st.button("Gerenciar Condutores"):
-            st.switch_page("pages/gerenciar_condutores.py")
-    
-    with col6:
-        if st.button("Gerenciar Usuários"):
-            st.switch_page("pages/gerenciar_usuarios.py")
-    
-    with col7:
-        if st.button("Sair"):
-            logout()
+    # Conteúdo baseado na opção selecionada
+    if menu_option == "Início":
+        st.title("Bem-vindo ao Sistema de Gestão de Veículos")
+        st.write(f"Usuário: {st.session_state.username}")
+        
+    elif menu_option == "Gerenciar Condutores":
+        from pages.gerenciar_condutores import show as show_condutores
+        show_condutores()
+        
+    elif menu_option == "Gerenciar Veículos":
+        from pages.gerenciar_veiculos import show as show_veiculos
+        show_veiculos()
+        
+    elif menu_option == "Registrar Saída":
+        from pages.registrar_saida import show as show_saida
+        show_saida()
+        
+    elif menu_option == "Registrar Retorno":
+        from pages.registrar_retorno import show as show_retorno
+        show_retorno()
     
     # Mostra informações do usuário
     st.write(f"Usuário: {st.session_state.username}")

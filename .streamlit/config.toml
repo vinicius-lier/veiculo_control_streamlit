@@ -5,18 +5,4 @@ enableXsrfProtection = true
 
 [browser]
 serverAddress = "0.0.0.0"
-serverPort = 10000
-gatherUsageStats = false
-
-[theme]
-primaryColor = "#2E86C1"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F0F2F6"
-textColor = "#262730"
-
-[client]
-toolbarMode = "minimal"
-showSidebarNavigation = true
-
-[pages]
-app = "HOME" 
+serverPort = 10000 

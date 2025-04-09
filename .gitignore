@@ -21,11 +21,9 @@ wheels/
 *.egg
 
 # Virtual Environment
-.env
-.venv
-env/
 venv/
 ENV/
+env/
 
 # IDE
 .idea/
@@ -33,21 +31,22 @@ ENV/
 *.swp
 *.swo
 
-# Streamlit
-.streamlit/
-
 # Logs
 *.log
 
-# Keep data directory
-!data/
-data/*
-!data/.gitkeep
+# Local
+.env
+.env.local
+.env.*.local
 
 # Database
 *.db
 *.sqlite3
 
-# Sistema operacional
+# Generated files
+pdfs/
+assets/logo.png
+
+# OS
 .DS_Store
 Thumbs.db 

@@ -56,9 +56,9 @@ if not drivers:
 else:
     for driver_id, driver in drivers.items():
         with st.expander(f"{driver['name']} - CNH: {driver['document']}"):
-            st.write(f"**Categoria:** {driver['categoria']}")
-            st.write(f"**Validade:** {driver['validade']}")
-            if os.path.exists(driver['foto_cnh']):
+            st.write(f"**Categoria:** {driver['license_category']}")
+            st.write(f"**Validade:** {driver['license_expiration']}")
+            if 'foto_cnh' in driver and os.path.exists(driver['foto_cnh']):
                 st.image(driver['foto_cnh'], caption="Foto da CNH")
             else:
                 st.warning("Foto da CNH não encontrada") 
