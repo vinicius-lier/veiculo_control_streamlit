@@ -11,6 +11,13 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.units import inch
 import json
 
+# Diretório para o banco de dados
+DB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+if not os.path.exists(DB_DIR):
+    os.makedirs(DB_DIR)
+
+DB_PATH = os.path.join(DB_DIR, 'vehicles.db')
+
 def hash_password(password):
     # Gera um salt e faz o hash da senha
     salt = bcrypt.gensalt()
@@ -22,7 +29,7 @@ def verify_password(password, hashed):
 
 # Conexão com SQLite
 def get_db():
-    db = sqlite3.connect('vehicles.db')
+    db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
     return db
 
@@ -149,65 +156,6 @@ def init_db():
     db.commit()
     db.close()
 
-def check_and_fix_database():
-    """Verifica e corrige problemas no banco de dados"""
-    db = get_db()
-    cursor = db.cursor()
-    
-    try:
-        # Verificar se a tabela vehicles existe
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='vehicles'")
-        if not cursor.fetchone():
-            # Recriar a tabela vehicles
-            cursor.execute('''
-            CREATE TABLE vehicles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                plate TEXT UNIQUE NOT NULL,
-                type TEXT NOT NULL,
-                model TEXT NOT NULL,
-                year INTEGER NOT NULL,
-                color TEXT,
-                chassis_number TEXT,
-                status TEXT DEFAULT 'available',
-                created_at TEXT NOT NULL,
-                updated_at TEXT
-            )
-            ''')
-            db.commit()
-            return "Tabela de veículos recriada com sucesso."
-        
-        # Verificar se há registros duplicados
-        cursor.execute('''
-        SELECT plate, COUNT(*) as count 
-        FROM vehicles 
-        GROUP BY plate 
-        HAVING count > 1
-        ''')
-        duplicates = cursor.fetchall()
-        
-        if duplicates:
-            # Remover duplicatas mantendo apenas o registro mais recente
-            for plate, count in duplicates:
-                cursor.execute('''
-                DELETE FROM vehicles 
-                WHERE plate = ? AND id NOT IN (
-                    SELECT MAX(id) FROM vehicles WHERE plate = ?
-                )
-                ''', (plate, plate))
-            
-            db.commit()
-            return f"Removidas {len(duplicates)} placas duplicadas."
-        
-        return "Banco de dados verificado e está correto."
-    except Exception as e:
-        return f"Erro ao verificar banco de dados: {str(e)}"
-    finally:
-        db.close()
-
-# Adicionar chamada para verificar o banco ao inicializar
-init_db()
-check_and_fix_database()
-
 def create_user(username, password, name, email=None):
     """Cria um novo usuário"""
     db = get_db()
@@ -253,75 +201,23 @@ def verify_user(username, password):
     db.close()
     return False, None
 
-def generate_license_pdf(driver_data, driver_id):
-    """Gera um PDF com os dados da CNH do motorista"""
-    # Criar diretório para PDFs se não existir
-    if not os.path.exists('pdfs/cnh'):
-        os.makedirs('pdfs/cnh')
-    
-    # Nome do arquivo
-    filename = f'pdfs/cnh/cnh_{driver_id}.pdf'
-    
-    # Criar documento
-    doc = SimpleDocTemplate(filename, pagesize=letter)
-    styles = getSampleStyleSheet()
-    elements = []
-    
-    # Título
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=16,
-        spaceAfter=30
-    )
-    elements.append(Paragraph("Dados da CNH", title_style))
-    
-    # Informações do motorista
-    elements.append(Paragraph("Informações do Condutor:", styles['Heading2']))
-    elements.append(Paragraph(f"Nome: {driver_data['nome']}", styles['Normal']))
-    elements.append(Paragraph(f"CNH: {driver_data['cnh']}", styles['Normal']))
-    elements.append(Paragraph(f"Categoria: {driver_data['categoria']}", styles['Normal']))
-    elements.append(Paragraph(f"Validade: {driver_data['validade']}", styles['Normal']))
-    if driver_data.get('telefone'):
-        elements.append(Paragraph(f"Telefone: {driver_data['telefone']}", styles['Normal']))
-    if driver_data.get('email'):
-        elements.append(Paragraph(f"Email: {driver_data['email']}", styles['Normal']))
-    
-    elements.append(Spacer(1, 30))
-    
-    # Data de registro
-    elements.append(Paragraph(f"Data de Registro: {datetime.now().strftime('%d/%m/%Y %H:%M')}", styles['Normal']))
-    
-    # Gerar PDF
-    doc.build(elements)
-    
-    return filename
-
 def register_driver(driver_data):
     """Registra um novo condutor"""
     db = get_db()
     cursor = db.cursor()
     
-    try:
-        cursor.execute('''
-        INSERT INTO drivers (name, document, phone, email, license_number, license_category, license_expiration, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (driver_data['nome'], driver_data['documento'], 
-              driver_data.get('telefone', ''), driver_data.get('email', ''),
-              driver_data['cnh'], driver_data['categoria'],
-              driver_data['validade'], 'ativo', datetime.now().isoformat()))
-        
-        driver_id = cursor.lastrowid
-        db.commit()
-        
-        # Gerar PDF da CNH
-        generate_license_pdf(driver_data, driver_id)
-        
-        return driver_id, "Motorista cadastrado com sucesso!"
-    except Exception as e:
-        return None, f"Erro ao cadastrar motorista: {str(e)}"
-    finally:
-        db.close()
+    cursor.execute('''
+    INSERT INTO drivers (name, document, phone, email, license_number, license_category, license_expiration, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (driver_data['nome'], driver_data['cnh'], 
+          driver_data.get('telefone', ''), driver_data.get('email', ''),
+          driver_data['cnh'], driver_data['categoria'],
+          driver_data['validade'], 'ativo', datetime.now().isoformat()))
+    
+    driver_id = cursor.lastrowid
+    db.commit()
+    db.close()
+    return driver_id
 
 def get_driver(driver_id):
     """Retorna os dados de um condutor"""
@@ -332,22 +228,7 @@ def get_driver(driver_id):
     driver = cursor.fetchone()
     db.close()
     
-    if driver:
-        # Converter para dicionário com nomes em português
-        return {
-            'id': driver['id'],
-            'nome': driver['name'],
-            'documento': driver['document'],
-            'telefone': driver['phone'],
-            'email': driver['email'],
-            'cnh': driver['license_number'],
-            'categoria': driver['license_category'],
-            'validade': driver['license_expiration'],
-            'status': driver['status'],
-            'criado_em': driver['created_at'],
-            'atualizado_em': driver['updated_at']
-        }
-    return None
+    return dict(driver) if driver else None
 
 def get_all_drivers():
     """Retorna todos os condutores"""
@@ -358,20 +239,7 @@ def get_all_drivers():
     drivers = cursor.fetchall()
     db.close()
     
-    # Converter para dicionário com nomes em português
-    return {row['id']: {
-        'id': row['id'],
-        'nome': row['name'],
-        'documento': row['document'],
-        'telefone': row['phone'],
-        'email': row['email'],
-        'cnh': row['license_number'],
-        'categoria': row['license_category'],
-        'validade': row['license_expiration'],
-        'status': row['status'],
-        'criado_em': row['created_at'],
-        'atualizado_em': row['updated_at']
-    } for row in drivers}
+    return {row['id']: dict(row) for row in drivers}
 
 def check_driver_has_active_vehicle(driver_id):
     """Verifica se o condutor tem veículo em uso"""
@@ -393,14 +261,6 @@ def register_vehicle(vehicle_data):
     cursor = conn.cursor()
     
     try:
-        # Verificar se a placa já existe
-        cursor.execute('SELECT id FROM vehicles WHERE plate = ?', (vehicle_data['plate'].upper(),))
-        existing = cursor.fetchone()
-        
-        if existing:
-            return None, "Já existe um veículo cadastrado com esta placa."
-        
-        # Inserir o novo veículo
         cursor.execute('''INSERT INTO vehicles (plate, type, model, year, color, chassis_number, status, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
                  (vehicle_data['plate'].upper(),
@@ -415,6 +275,8 @@ def register_vehicle(vehicle_data):
         vehicle_id = cursor.lastrowid
         conn.commit()
         return vehicle_id, "Veículo cadastrado com sucesso!"
+    except sqlite3.IntegrityError:
+        return None, "Já existe um veículo cadastrado com esta placa."
     except Exception as e:
         return None, f"Erro ao cadastrar veículo: {str(e)}"
     finally:
@@ -446,7 +308,7 @@ def get_vehicle(vehicle_id):
 
 def register_vehicle_exit(data):
     try:
-        conn = sqlite3.connect('vehicles.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         # Registrar saída
@@ -522,9 +384,9 @@ def generate_checklist_pdf(exit_id, data):
     # Informações do motorista
     driver = get_driver(data['driver_id'])
     elements.append(Paragraph("Informações do Motorista:", styles['Heading2']))
-    elements.append(Paragraph(f"Nome: {driver['nome']}", styles['Normal']))
-    elements.append(Paragraph(f"Documento: {driver['documento']}", styles['Normal']))
-    elements.append(Paragraph(f"Telefone: {driver.get('telefone', 'Não informado')}", styles['Normal']))
+    elements.append(Paragraph(f"Nome: {driver['name']}", styles['Normal']))
+    elements.append(Paragraph(f"Documento: {driver['document']}", styles['Normal']))
+    elements.append(Paragraph(f"Telefone: {driver.get('phone', 'Não informado')}", styles['Normal']))
     elements.append(Spacer(1, 20))
     
     # Checklist externo
@@ -597,7 +459,7 @@ def generate_checklist_pdf(exit_id, data):
 
 def get_vehicle_by_id(vehicle_id):
     try:
-        conn = sqlite3.connect('vehicles.db')
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         cursor.execute('SELECT * FROM vehicles WHERE id = ?', (vehicle_id,))
@@ -672,23 +534,16 @@ def get_weekly_report():
     db = get_db()
     cursor = db.cursor()
     
-    # Calcular a data de 7 dias atrás
-    seven_days_ago = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    seven_days_ago = (seven_days_ago - timedelta(days=7)).isoformat()
+    seven_days_ago = (datetime.now().timestamp() - (7 * 24 * 60 * 60))
+    cursor.execute('''
+    SELECT * FROM vehicle_exits 
+    WHERE datetime(exit_date) > datetime(?)
+    ''', (datetime.fromtimestamp(seven_days_ago).isoformat(),))
     
-    try:
-        cursor.execute('''
-        SELECT * FROM vehicle_exits 
-        WHERE datetime(exit_date) >= datetime(?)
-        ''', (seven_days_ago,))
-        
-        exits = cursor.fetchall()
-        return {row['id']: dict(row) for row in exits}
-    except Exception as e:
-        print(f"Erro ao gerar relatório semanal: {str(e)}")
-        return {}
-    finally:
-        db.close()
+    exits = cursor.fetchall()
+    db.close()
+    
+    return {row['id']: dict(row) for row in exits}
 
 def get_driver_statistics():
     """Retorna estatísticas dos motoristas"""
@@ -697,7 +552,7 @@ def get_driver_statistics():
     
     # Motorista com mais saídas
     cursor.execute('''
-    SELECT d.id, d.name as nome, COUNT(*) as total_saidas
+    SELECT d.id, d.name, COUNT(*) as total_saidas
     FROM drivers d
     JOIN vehicle_exits v ON d.id = v.driver_id
     GROUP BY d.id, d.name
@@ -707,7 +562,7 @@ def get_driver_statistics():
     
     # Motorista com maior quilometragem
     cursor.execute('''
-    SELECT d.id, d.name as nome, SUM(v.final_odometer - v.initial_odometer) as total_km
+    SELECT d.id, d.name, SUM(v.final_odometer - v.initial_odometer) as total_km
     FROM drivers d
     JOIN vehicle_exits v ON d.id = v.driver_id
     WHERE v.final_odometer IS NOT NULL AND v.initial_odometer IS NOT NULL
@@ -718,7 +573,7 @@ def get_driver_statistics():
     
     # Motorista com maior tempo de uso
     cursor.execute('''
-    SELECT d.id, d.name as nome, 
+    SELECT d.id, d.name, 
            SUM(CAST((julianday(v.actual_return_date) - julianday(v.exit_date)) * 24 AS INTEGER)) as total_horas
     FROM drivers d
     JOIN vehicle_exits v ON d.id = v.driver_id
@@ -731,36 +586,7 @@ def get_driver_statistics():
     db.close()
     
     return {
-        'mais_saidas': [dict(row) for row in most_exits],
-        'mais_km': [dict(row) for row in most_km],
-        'mais_tempo': [dict(row) for row in most_time]
-    }
-
-def get_all_users():
-    """Retorna todos os usuários de forma segura (sem senhas)"""
-    db = get_db()
-    cursor = db.cursor()
-    
-    try:
-        cursor.execute('''
-        SELECT id, username, role, name, email, created_at, last_login 
-        FROM users
-        ORDER BY created_at DESC
-        ''')
-        users = cursor.fetchall()
-        
-        # Converte para dicionário com nomes em português
-        return {row['id']: {
-            'id': row['id'],
-            'usuario': row['username'],
-            'funcao': row['role'],
-            'nome': row['name'],
-            'email': row['email'],
-            'criado_em': row['created_at'],
-            'ultimo_acesso': row['last_login']
-        } for row in users}
-    except Exception as e:
-        print(f"Erro ao listar usuários: {str(e)}")
-        return {}
-    finally:
-        db.close() 
+        'most_exits': [dict(row) for row in most_exits],
+        'most_km': [dict(row) for row in most_km],
+        'most_time': [dict(row) for row in most_time]
+    } 

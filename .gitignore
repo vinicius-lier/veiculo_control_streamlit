@@ -4,7 +4,6 @@ __pycache__/
 *$py.class
 *.so
 .Python
-env/
 build/
 develop-eggs/
 dist/
@@ -22,6 +21,9 @@ wheels/
 *.egg
 
 # Virtual Environment
+.env
+.venv
+env/
 venv/
 ENV/
 
@@ -34,12 +36,17 @@ ENV/
 # Streamlit
 .streamlit/
 
+# Logs
+*.log
+
+# Keep data directory
+!data/
+data/*
+!data/.gitkeep
+
 # Database
 *.db
 *.sqlite3
-
-# Logs
-*.log
 
 # Sistema operacional
 .DS_Store
