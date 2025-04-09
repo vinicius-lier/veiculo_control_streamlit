@@ -253,23 +253,75 @@ def verify_user(username, password):
     db.close()
     return False, None
 
+def generate_license_pdf(driver_data, driver_id):
+    """Gera um PDF com os dados da CNH do motorista"""
+    # Criar diretório para PDFs se não existir
+    if not os.path.exists('pdfs/cnh'):
+        os.makedirs('pdfs/cnh')
+    
+    # Nome do arquivo
+    filename = f'pdfs/cnh/cnh_{driver_id}.pdf'
+    
+    # Criar documento
+    doc = SimpleDocTemplate(filename, pagesize=letter)
+    styles = getSampleStyleSheet()
+    elements = []
+    
+    # Título
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=16,
+        spaceAfter=30
+    )
+    elements.append(Paragraph("Dados da CNH", title_style))
+    
+    # Informações do motorista
+    elements.append(Paragraph("Informações do Condutor:", styles['Heading2']))
+    elements.append(Paragraph(f"Nome: {driver_data['nome']}", styles['Normal']))
+    elements.append(Paragraph(f"CNH: {driver_data['cnh']}", styles['Normal']))
+    elements.append(Paragraph(f"Categoria: {driver_data['categoria']}", styles['Normal']))
+    elements.append(Paragraph(f"Validade: {driver_data['validade']}", styles['Normal']))
+    if driver_data.get('telefone'):
+        elements.append(Paragraph(f"Telefone: {driver_data['telefone']}", styles['Normal']))
+    if driver_data.get('email'):
+        elements.append(Paragraph(f"Email: {driver_data['email']}", styles['Normal']))
+    
+    elements.append(Spacer(1, 30))
+    
+    # Data de registro
+    elements.append(Paragraph(f"Data de Registro: {datetime.now().strftime('%d/%m/%Y %H:%M')}", styles['Normal']))
+    
+    # Gerar PDF
+    doc.build(elements)
+    
+    return filename
+
 def register_driver(driver_data):
     """Registra um novo condutor"""
     db = get_db()
     cursor = db.cursor()
     
-    cursor.execute('''
-    INSERT INTO drivers (name, document, phone, email, license_number, license_category, license_expiration, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (driver_data['nome'], driver_data['cnh'], 
-          driver_data.get('telefone', ''), driver_data.get('email', ''),
-          driver_data['cnh'], driver_data['categoria'],
-          driver_data['validade'], 'ativo', datetime.now().isoformat()))
-    
-    driver_id = cursor.lastrowid
-    db.commit()
-    db.close()
-    return driver_id
+    try:
+        cursor.execute('''
+        INSERT INTO drivers (name, document, phone, email, license_number, license_category, license_expiration, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (driver_data['nome'], driver_data['cnh'], 
+              driver_data.get('telefone', ''), driver_data.get('email', ''),
+              driver_data['cnh'], driver_data['categoria'],
+              driver_data['validade'], 'ativo', datetime.now().isoformat()))
+        
+        driver_id = cursor.lastrowid
+        db.commit()
+        
+        # Gerar PDF da CNH
+        generate_license_pdf(driver_data, driver_id)
+        
+        return driver_id, "Motorista cadastrado com sucesso!"
+    except Exception as e:
+        return None, f"Erro ao cadastrar motorista: {str(e)}"
+    finally:
+        db.close()
 
 def get_driver(driver_id):
     """Retorna os dados de um condutor"""
