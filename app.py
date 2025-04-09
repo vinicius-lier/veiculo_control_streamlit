@@ -1,82 +1,97 @@
 import streamlit as st
-from database import init_db, verify_user, create_user
-from utils import init_session_state
-import os
-from PIL import Image
+from database import verify_user, init_db
+from utils import check_login
+from redis_client import save_data, get_data
 
 # Configuração da página
 st.set_page_config(
     page_title="Sistema de Gestão de Veículos",
     page_icon="🚗",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
-# Inicialização
-init_session_state()
+# Inicializa o banco de dados
 init_db()
 
-# Logo da empresa
-logo_path = os.path.join("imagens", "4.png")
-if os.path.exists(logo_path):
-    logo = Image.open(logo_path)
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.image(logo, use_column_width=True)
-    st.markdown("---")
+# Inicializa o estado da sessão
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.username = None
+    st.session_state.role = None
 
-# Título principal
+# Função para fazer login
+def login(username, password):
+    success, user = verify_user(username, password)
+    if success:
+        st.session_state.logged_in = True
+        st.session_state.username = user['username']
+        st.session_state.role = user['role']
+        # Salva os dados do usuário no Redis
+        save_data(f"user_{username}", user)
+        return True
+    return False
+
+# Função para fazer logout
+def logout():
+    st.session_state.logged_in = False
+    st.session_state.username = None
+    st.session_state.role = None
+    st.rerun()
+
+# Título da página
 st.title("Sistema de Gestão de Veículos")
 
-# Sidebar para navegação
-if st.session_state.logged_in:
-    st.sidebar.title("Menu")
-    st.sidebar.write(f"Usuário: {st.session_state.username}")
-    
-    if st.sidebar.button("Logout"):
-        st.session_state.logged_in = False
-        st.session_state.username = None
-        st.session_state.user_role = None
-        st.rerun()
-    
-    st.sidebar.markdown("---")
-    st.sidebar.page_link("pages/gerenciar_condutores.py", label="Gerenciar Condutores")
-    st.sidebar.page_link("pages/registrar_saida.py", label="Registrar Saída")
-    st.sidebar.page_link("pages/registrar_retorno.py", label="Registrar Retorno")
-    st.sidebar.page_link("pages/gerar_relatorio.py", label="Gerar Relatório")
-    st.sidebar.page_link("pages/dashboard.py", label="Dashboard")
-else:
-    # Formulário de login
-    st.write("### Login")
+# Se não estiver logado, mostra o formulário de login
+if not st.session_state.logged_in:
     with st.form("login_form"):
         username = st.text_input("Usuário")
         password = st.text_input("Senha", type="password")
         submit = st.form_submit_button("Entrar")
         
         if submit:
-            success, user = verify_user(username, password)
-            if success:
-                st.session_state.logged_in = True
-                st.session_state.username = user['username']
-                st.session_state.user_role = user['role']
+            if login(username, password):
                 st.rerun()
             else:
                 st.error("Usuário ou senha inválidos")
+else:
+    # Botões na parte superior
+    col1, col2, col3, col4, col5, col6, col7 = st.columns([1,1,1,1,1,1,1])
     
-    # Seção para criar novo usuário
-    st.markdown("---")
-    st.write("### Criar Novo Usuário")
-    with st.form("create_user_form"):
-        new_username = st.text_input("Nome de usuário")
-        new_password = st.text_input("Senha", type="password")
-        confirm_password = st.text_input("Confirmar senha", type="password")
-        create = st.form_submit_button("Criar Usuário")
-        
-        if create:
-            if new_password != confirm_password:
-                st.error("As senhas não coincidem")
-            else:
-                success, message = create_user(new_username, new_password)
-                if success:
-                    st.success(message)
-                else:
-                    st.error(message) 
+    with col1:
+        if st.button("Dashboard"):
+            st.switch_page("pages/dashboard.py")
+    
+    with col2:
+        if st.button("Registrar Saída"):
+            st.switch_page("pages/registrar_saida.py")
+    
+    with col3:
+        if st.button("Registrar Retorno"):
+            st.switch_page("pages/registrar_retorno.py")
+    
+    with col4:
+        if st.button("Gerenciar Veículos"):
+            st.switch_page("pages/gerenciar_veiculos.py")
+    
+    with col5:
+        if st.button("Gerenciar Condutores"):
+            st.switch_page("pages/gerenciar_condutores.py")
+    
+    with col6:
+        if st.button("Gerenciar Usuários"):
+            st.switch_page("pages/gerenciar_usuarios.py")
+    
+    with col7:
+        if st.button("Sair"):
+            logout()
+    
+    # Mostra informações do usuário
+    st.write(f"Usuário: {st.session_state.username}")
+    st.write(f"Função: {st.session_state.role}")
+    
+    # Tenta recuperar dados do usuário do Redis
+    user_data = get_data(f"user_{st.session_state.username}")
+    if user_data:
+        st.write("Dados do usuário recuperados do Redis:")
+        st.json(user_data) 

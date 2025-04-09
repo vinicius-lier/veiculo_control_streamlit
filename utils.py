@@ -24,15 +24,6 @@ def format_datetime(dt_str):
     dt = datetime.fromisoformat(dt_str)
     return dt.strftime("%d/%m/%Y %H:%M")
 
-def init_session_state():
-    """Inicializa as variáveis de sessão"""
-    if 'logged_in' not in st.session_state:
-        st.session_state.logged_in = False
-    if 'username' not in st.session_state:
-        st.session_state.username = None
-    if 'user_role' not in st.session_state:
-        st.session_state.user_role = None
-
 def check_login():
     """Verifica se o usuário está logado"""
     if not st.session_state.logged_in:
