@@ -202,22 +202,49 @@ def verify_user(username, password):
     return False, None
 
 def register_driver(driver_data):
-    """Registra um novo condutor"""
-    db = get_db()
-    cursor = db.cursor()
+    """
+    Registra um novo condutor no banco de dados.
     
-    cursor.execute('''
-    INSERT INTO drivers (name, document, phone, email, license_number, license_category, license_expiration, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (driver_data['nome'], driver_data['cnh'], 
-          driver_data.get('telefone', ''), driver_data.get('email', ''),
-          driver_data['cnh'], driver_data['categoria'],
-          driver_data['validade'], 'ativo', datetime.now().isoformat()))
+    Args:
+        driver_data (dict): Dicionário contendo os dados do condutor
+            - name: Nome do condutor
+            - document: Número da CNH
+            - license_category: Categoria da CNH
+            - license_expiration: Data de validade da CNH
+            - license_photo_path: Caminho da foto da CNH (opcional)
+            - phone: Telefone (opcional)
+            - email: Email (opcional)
+            - status: Status do condutor (default: 'active')
     
-    driver_id = cursor.lastrowid
-    db.commit()
-    db.close()
-    return driver_id
+    Returns:
+        int: ID do condutor cadastrado
+    """
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO drivers (
+                name, document, license_category, license_expiration,
+                license_photo_path, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        """, (
+            driver_data['nome'],
+            driver_data['cnh'],
+            driver_data['categoria'],
+            driver_data['validade'],
+            driver_data.get('foto_cnh'),
+            'active'
+        ))
+        
+        driver_id = cursor.lastrowid
+        conn.commit()
+        return driver_id
+        
+    except Exception as e:
+        raise Exception(f"Erro ao cadastrar condutor: {str(e)}")
+    finally:
+        conn.close()
 
 def get_driver(driver_id):
     """Retorna os dados de um condutor"""
@@ -230,16 +257,44 @@ def get_driver(driver_id):
     
     return dict(driver) if driver else None
 
-def get_all_drivers():
-    """Retorna todos os condutores"""
-    db = get_db()
-    cursor = db.cursor()
+def get_drivers():
+    """
+    Retorna a lista de todos os condutores cadastrados.
     
-    cursor.execute('SELECT * FROM drivers')
-    drivers = cursor.fetchall()
-    db.close()
-    
-    return {row['id']: dict(row) for row in drivers}
+    Returns:
+        list: Lista de dicionários contendo os dados dos condutores
+    """
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, name, document, license_category, license_expiration,
+                   license_photo_path, status, created_at, updated_at
+            FROM drivers
+            ORDER BY name
+        """)
+        
+        drivers = []
+        for row in cursor.fetchall():
+            drivers.append({
+                'id': row[0],
+                'nome': row[1],
+                'cnh': row[2],
+                'categoria': row[3],
+                'validade': row[4],
+                'foto_cnh': row[5],
+                'status': row[6],
+                'created_at': row[7],
+                'updated_at': row[8]
+            })
+            
+        return drivers
+        
+    except Exception as e:
+        raise Exception(f"Erro ao buscar condutores: {str(e)}")
+    finally:
+        conn.close()
 
 def check_driver_has_active_vehicle(driver_id):
     """Verifica se o condutor tem veículo em uso"""
@@ -306,50 +361,62 @@ def get_vehicle(vehicle_id):
     conn.close()
     return vehicle
 
-def register_vehicle_exit(data):
+def register_vehicle_exit(vehicle_id, driver_id, user_id, exit_data):
+    """
+    Registra a saída de um veículo.
+    
+    Args:
+        vehicle_id (int): ID do veículo
+        driver_id (int): ID do condutor
+        user_id (int): ID do usuário que registrou a saída
+        exit_data (dict): Dicionário com os dados da saída contendo:
+            - exit_date: data/hora de saída
+            - expected_return_date: data/hora prevista para retorno
+            - initial_odometer: quilometragem inicial
+            - destination: destino
+            - purpose: finalidade
+            - external_checklist: lista de verificação externa
+            - internal_checklist: lista de verificação interna
+            - observations: observações
+            
+    Returns:
+        int: ID do registro de saída criado
+    """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_db()
         cursor = conn.cursor()
         
-        # Registrar saída
-        cursor.execute('''
+        # Insere o registro de saída
+        cursor.execute("""
             INSERT INTO vehicle_exits (
                 vehicle_id, driver_id, user_id, exit_date, expected_return_date,
-                initial_odometer, destination, purpose, status, external_checklist, 
-                internal_checklist, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            data['vehicle_id'],
-            data['driver_id'],
-            data['user_id'],
-            datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            data.get('expected_return_date', ''),
-            data.get('initial_odometer', 0),
-            data.get('destination', ''),
-            data.get('purpose', ''),
-            'in_progress',
-            json.dumps(data['external_checklist']),
-            json.dumps(data['internal_checklist']),
-            datetime.now().isoformat()
+                initial_odometer, destination, purpose, external_checklist,
+                internal_checklist, observations, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'))
+        """, (
+            vehicle_id, driver_id, user_id,
+            exit_data['exit_date'], exit_data['expected_return_date'],
+            exit_data['initial_odometer'], exit_data['destination'],
+            exit_data['purpose'], json.dumps(exit_data['external_checklist']),
+            json.dumps(exit_data['internal_checklist']),
+            exit_data.get('observations', '')
         ))
         
         exit_id = cursor.lastrowid
         
-        # Atualizar status do veículo
-        cursor.execute('''
+        # Atualiza o status do veículo
+        cursor.execute("""
             UPDATE vehicles 
-            SET status = 'in_use', updated_at = ? 
+            SET status = 'in_use', updated_at = datetime('now')
             WHERE id = ?
-        ''', (datetime.now().isoformat(), data['vehicle_id']))
+        """, (vehicle_id,))
         
         conn.commit()
+        return exit_id
         
-        # Gerar PDF do checklist
-        generate_checklist_pdf(exit_id, data)
-        
-        return exit_id, "Saída registrada com sucesso!"
     except Exception as e:
-        return None, f"Erro ao registrar saída: {str(e)}"
+        conn.rollback()
+        raise Exception(f"Erro ao registrar saída do veículo: {str(e)}")
     finally:
         conn.close()
 
@@ -494,56 +561,153 @@ def get_active_exits():
     
     return {row['id']: dict(row) for row in exits}
 
-def register_vehicle_return(exit_id, data):
-    """Registra o retorno de um veículo"""
-    db = get_db()
-    cursor = db.cursor()
+def register_vehicle_return(exit_id, return_data):
+    """
+    Registra o retorno de um veículo.
     
-    cursor.execute('SELECT * FROM vehicle_exits WHERE id = ?', (exit_id,))
-    exit_data = cursor.fetchone()
-    
-    if not exit_data:
-        db.close()
-        return False, "Saída não encontrada"
-    
-    if exit_data['status'] != 'in_progress':
-        db.close()
-        return False, "Veículo já retornado"
-    
-    cursor.execute('''
-    UPDATE vehicle_exits 
-    SET status = ?, actual_return_date = ?, final_odometer = ?, observations = ?, updated_at = ?
-    WHERE id = ?
-    ''', ('completed', datetime.now().isoformat(), 
-          data.get('final_odometer', 0), data.get('observations', ''), 
-          datetime.now().isoformat(), exit_id))
-    
-    # Atualizar status do veículo
-    cursor.execute('''
-    UPDATE vehicles 
-    SET status = 'available', updated_at = ? 
-    WHERE id = ?
-    ''', (datetime.now().isoformat(), exit_data['vehicle_id']))
-    
-    db.commit()
-    db.close()
-    return True, "Retorno registrado com sucesso"
+    Args:
+        exit_id (int): ID do registro de saída
+        return_data (dict): Dicionário com os dados do retorno contendo:
+            - actual_return_date: data/hora efetiva do retorno
+            - final_odometer: quilometragem final
+            - observations: observações do retorno
+            
+    Returns:
+        bool: True se o retorno foi registrado com sucesso
+    """
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Busca o ID do veículo associado à saída
+        cursor.execute("SELECT vehicle_id FROM vehicle_exits WHERE id = ?", (exit_id,))
+        result = cursor.fetchone()
+        if not result:
+            raise Exception("Registro de saída não encontrado")
+            
+        vehicle_id = result[0]
+        
+        # Atualiza o registro de saída
+        cursor.execute("""
+            UPDATE vehicle_exits 
+            SET actual_return_date = ?,
+                final_odometer = ?,
+                observations = CASE 
+                    WHEN observations IS NULL OR observations = '' 
+                    THEN ? 
+                    ELSE observations || char(10) || ?
+                END,
+                status = 'completed',
+                updated_at = datetime('now')
+            WHERE id = ?
+        """, (
+            return_data['actual_return_date'],
+            return_data['final_odometer'],
+            return_data.get('observations', ''),
+            'Observações do retorno: ' + return_data.get('observations', ''),
+            exit_id
+        ))
+        
+        # Atualiza o status do veículo
+        cursor.execute("""
+            UPDATE vehicles 
+            SET status = 'available',
+                updated_at = datetime('now')
+            WHERE id = ?
+        """, (vehicle_id,))
+        
+        conn.commit()
+        return True
+        
+    except Exception as e:
+        conn.rollback()
+        raise Exception(f"Erro ao registrar retorno do veículo: {str(e)}")
+    finally:
+        conn.close()
 
 def get_weekly_report():
-    """Retorna os registros dos últimos 7 dias"""
-    db = get_db()
-    cursor = db.cursor()
+    """
+    Gera um relatório semanal de uso dos veículos.
     
-    seven_days_ago = (datetime.now().timestamp() - (7 * 24 * 60 * 60))
-    cursor.execute('''
-    SELECT * FROM vehicle_exits 
-    WHERE datetime(exit_date) > datetime(?)
-    ''', (datetime.fromtimestamp(seven_days_ago).isoformat(),))
-    
-    exits = cursor.fetchall()
-    db.close()
-    
-    return {row['id']: dict(row) for row in exits}
+    Returns:
+        dict: Dicionário com estatísticas semanais contendo:
+            - total_exits: número total de saídas
+            - active_exits: número de saídas em andamento
+            - completed_exits: número de saídas concluídas
+            - vehicles_stats: estatísticas por veículo
+            - drivers_stats: estatísticas por motorista
+    """
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Define o período (últimos 7 dias)
+        seven_days_ago = datetime.now() - timedelta(days=7)
+        
+        # Estatísticas gerais
+        cursor.execute("""
+            SELECT 
+                COUNT(*) as total_exits,
+                SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as active_exits,
+                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_exits
+            FROM vehicle_exits 
+            WHERE exit_date >= ?
+        """, (seven_days_ago.isoformat(),))
+        
+        general_stats = dict(cursor.fetchone())
+        
+        # Estatísticas por veículo
+        cursor.execute("""
+            SELECT 
+                v.id,
+                v.plate,
+                v.model,
+                COUNT(ve.id) as total_exits,
+                SUM(CASE WHEN ve.status = 'in_progress' THEN 1 ELSE 0 END) as active_exits,
+                SUM(CASE WHEN ve.status = 'completed' THEN 1 ELSE 0 END) as completed_exits,
+                SUM(CASE 
+                    WHEN ve.status = 'completed' AND ve.final_odometer IS NOT NULL 
+                    THEN ve.final_odometer - ve.initial_odometer 
+                    ELSE 0 
+                END) as total_km
+            FROM vehicles v
+            LEFT JOIN vehicle_exits ve ON v.id = ve.vehicle_id 
+                AND ve.exit_date >= ?
+            GROUP BY v.id, v.plate, v.model
+            ORDER BY total_exits DESC
+        """, (seven_days_ago.isoformat(),))
+        
+        vehicles_stats = [dict(row) for row in cursor.fetchall()]
+        
+        # Estatísticas por motorista
+        cursor.execute("""
+            SELECT 
+                d.id,
+                d.name,
+                d.license_category,
+                COUNT(ve.id) as total_exits,
+                SUM(CASE WHEN ve.status = 'in_progress' THEN 1 ELSE 0 END) as active_exits,
+                SUM(CASE WHEN ve.status = 'completed' THEN 1 ELSE 0 END) as completed_exits,
+                COUNT(DISTINCT ve.vehicle_id) as different_vehicles
+            FROM drivers d
+            LEFT JOIN vehicle_exits ve ON d.id = ve.driver_id 
+                AND ve.exit_date >= ?
+            GROUP BY d.id, d.name, d.license_category
+            ORDER BY total_exits DESC
+        """, (seven_days_ago.isoformat(),))
+        
+        drivers_stats = [dict(row) for row in cursor.fetchall()]
+        
+        return {
+            **general_stats,
+            'vehicles_stats': vehicles_stats,
+            'drivers_stats': drivers_stats
+        }
+        
+    except Exception as e:
+        raise Exception(f"Erro ao gerar relatório semanal: {str(e)}")
+    finally:
+        conn.close()
 
 def get_driver_statistics():
     """Retorna estatísticas dos motoristas"""
