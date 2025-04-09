@@ -25,7 +25,7 @@ if not drivers:
 # Formulário de registro
 with st.form("exit_form"):
     # Selecionar condutor
-    driver_options = {f"{v['nome']} - CNH: {v['cnh']}": k for k, v in drivers.items()}
+    driver_options = {f"{v['name']} - CNH: {v['document']}": k for k, v in drivers.items()}
     selected_driver = st.selectbox("Selecione o Condutor", options=list(driver_options.keys()))
     driver_id = driver_options[selected_driver]
     
@@ -34,40 +34,29 @@ with st.form("exit_form"):
         st.error("Este condutor já possui um veículo em uso")
         st.stop()
     
-    # Tipo de veículo
-    tipo_veiculo = st.selectbox("Tipo de Veículo", ["Carro", "Moto"])
+    # Placa do veículo
+    vehicle_plate = st.text_input("Placa do Veículo")
     
-    # Odômetro
-    odometro = st.number_input("Odômetro de Saída", min_value=0, step=1)
-    
-    # Check de avaria
-    tem_avaria = st.checkbox("Veículo com avaria?")
-    
-    # Upload de foto (opcional)
-    foto_avaria = None
-    if tem_avaria:
-        foto_avaria = st.file_uploader("Foto da Avaria", type=["jpg", "jpeg", "png"])
+    # Destino
+    destination = st.text_input("Destino")
     
     # Botão de submit
     submitted = st.form_submit_button("Registrar Saída")
     
     if submitted:
-        # Preparar dados
-        data = {
-            "driver_id": driver_id,
-            "tipo_veiculo": tipo_veiculo,
-            "odometro_saida": odometro,
-            "tem_avaria": tem_avaria,
-            "foto_avaria": None
-        }
-        
-        # Salvar foto se houver
-        if foto_avaria:
-            data["foto_avaria"] = save_uploaded_file(foto_avaria)
-        
-        # Registrar saída
-        exit_id, message = register_vehicle_exit(data)
-        if exit_id:
-            st.success(message)
+        if not all([vehicle_plate, destination]):
+            st.error("Todos os campos são obrigatórios")
         else:
-            st.error(message) 
+            # Preparar dados
+            data = {
+                "driver_id": driver_id,
+                "vehicle_plate": vehicle_plate,
+                "destination": destination
+            }
+            
+            # Registrar saída
+            exit_id, message = register_vehicle_exit(data)
+            if exit_id:
+                st.success(message)
+            else:
+                st.error(message) 

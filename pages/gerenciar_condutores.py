@@ -55,7 +55,7 @@ if not drivers:
     st.info("Não há condutores cadastrados.")
 else:
     for driver_id, driver in drivers.items():
-        with st.expander(f"{driver['nome']} - CNH: {driver['cnh']}"):
+        with st.expander(f"{driver['name']} - CNH: {driver['document']}"):
             st.write(f"**Categoria:** {driver['categoria']}")
             st.write(f"**Validade:** {driver['validade']}")
             if os.path.exists(driver['foto_cnh']):

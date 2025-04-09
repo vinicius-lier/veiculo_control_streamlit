@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from database import get_weekly_report
+from database import get_weekly_report, get_driver
 from utils import check_login, format_datetime
 from io import BytesIO
 
@@ -26,17 +26,20 @@ else:
     # Preparar dados para o DataFrame
     records = []
     for exit_id, record in data.items():
+        # Obter dados do condutor
+        driver = get_driver(record["driver_id"])
+        driver_name = driver["name"] if driver else "Condutor não encontrado"
+        
         records.append({
             "ID": exit_id,
-            "Condutor": record["condutor"],
-            "Veículo": record["tipo_veiculo"],
+            "Condutor": driver_name,
+            "Veículo": record["vehicle_plate"],
+            "Destino": record["destination"],
             "Data Saída": format_datetime(record["data_saida"]),
-            "Odômetro Saída": record["odometro_saida"],
-            "Avaria Saída": "Sim" if record["tem_avaria"] else "Não",
             "Status": record["status"],
-            "Data Retorno": format_datetime(record["data_retorno"]) if "data_retorno" in record else "-",
-            "Odômetro Retorno": record.get("odometro_retorno", "-"),
-            "Avaria Retorno": "Sim" if record.get("tem_avaria_retorno", False) else "Não"
+            "Data Retorno": format_datetime(record["data_retorno"]) if record["data_retorno"] else "-",
+            "Quilometragem": record.get("quilometragem", "-"),
+            "Observações": record.get("observations", "-")
         })
     
     # Criar DataFrame
