@@ -7,4 +7,5 @@ python-dotenv==1.0.1
 requests==2.31.0
 urllib3==2.2.1
 cffi==1.16.0
-six==1.16.0 
+six==1.16.0
+plotly==5.18.0 

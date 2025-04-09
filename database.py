@@ -39,7 +39,10 @@ def init_db():
         name TEXT NOT NULL,
         document TEXT NOT NULL,
         status TEXT NOT NULL,
-        data_registro TEXT NOT NULL
+        data_registro TEXT NOT NULL,
+        categoria TEXT NOT NULL,
+        validade TEXT NOT NULL,
+        foto_cnh TEXT NOT NULL
     )
     ''')
     
@@ -54,6 +57,7 @@ def init_db():
         data_saida TEXT NOT NULL,
         data_retorno TEXT,
         observations TEXT,
+        quilometragem INTEGER,
         FOREIGN KEY (driver_id) REFERENCES drivers (id)
     )
     ''')
@@ -110,10 +114,11 @@ def register_driver(driver_data):
     
     driver_id = f"driver_{datetime.now().strftime('%Y%m%d%H%M%S')}"
     cursor.execute('''
-    INSERT INTO drivers (id, name, document, status, data_registro)
-    VALUES (?, ?, ?, ?, ?)
-    ''', (driver_id, driver_data['name'], driver_data['document'], 
-          'ativo', datetime.now().isoformat()))
+    INSERT INTO drivers (id, name, document, status, data_registro, categoria, validade, foto_cnh)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (driver_id, driver_data['nome'], driver_data['cnh'], 
+          'ativo', datetime.now().isoformat(), driver_data['categoria'],
+          driver_data['validade'], driver_data['foto_cnh']))
     
     db.commit()
     db.close()
@@ -204,10 +209,10 @@ def register_vehicle_return(exit_id, data):
     
     cursor.execute('''
     UPDATE vehicle_exits 
-    SET status = ?, data_retorno = ?, observations = ?
+    SET status = ?, data_retorno = ?, observations = ?, quilometragem = ?
     WHERE id = ?
     ''', ('retornado', datetime.now().isoformat(), 
-          data.get('observations', ''), exit_id))
+          data.get('observations', ''), data.get('quilometragem', 0), exit_id))
     
     db.commit()
     db.close()
@@ -227,4 +232,50 @@ def get_weekly_report():
     exits = cursor.fetchall()
     db.close()
     
-    return {row['id']: dict(row) for row in exits} 
+    return {row['id']: dict(row) for row in exits}
+
+def get_driver_statistics():
+    """Retorna estatísticas dos motoristas"""
+    db = get_db()
+    cursor = db.cursor()
+    
+    # Motorista com mais saídas
+    cursor.execute('''
+    SELECT d.id, d.name, COUNT(*) as total_saidas
+    FROM drivers d
+    JOIN vehicle_exits v ON d.id = v.driver_id
+    GROUP BY d.id, d.name
+    ORDER BY total_saidas DESC
+    ''')
+    most_exits = cursor.fetchall()
+    
+    # Motorista com maior quilometragem
+    cursor.execute('''
+    SELECT d.id, d.name, SUM(v.quilometragem) as total_km
+    FROM drivers d
+    JOIN vehicle_exits v ON d.id = v.driver_id
+    WHERE v.quilometragem IS NOT NULL
+    GROUP BY d.id, d.name
+    ORDER BY total_km DESC
+    ''')
+    most_km = cursor.fetchall()
+    
+    # Motorista com maior tempo de uso
+    cursor.execute('''
+    SELECT d.id, d.name, 
+           SUM(CAST((julianday(v.data_retorno) - julianday(v.data_saida)) * 24 AS INTEGER)) as total_horas
+    FROM drivers d
+    JOIN vehicle_exits v ON d.id = v.driver_id
+    WHERE v.data_retorno IS NOT NULL
+    GROUP BY d.id, d.name
+    ORDER BY total_horas DESC
+    ''')
+    most_time = cursor.fetchall()
+    
+    db.close()
+    
+    return {
+        'most_exits': [dict(row) for row in most_exits],
+        'most_km': [dict(row) for row in most_km],
+        'most_time': [dict(row) for row in most_time]
+    } 

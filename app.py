@@ -2,17 +2,27 @@ import streamlit as st
 from database import init_db, verify_user, create_user
 from utils import init_session_state
 import os
+from PIL import Image
 
 # Configuração da página
 st.set_page_config(
     page_title="Sistema de Gestão de Veículos",
-    page_icon="imagens\4.png",
+    page_icon="🚗",
     layout="wide"
 )
 
 # Inicialização
 init_session_state()
 init_db()
+
+# Logo da empresa
+logo_path = os.path.join("imagens", "4.png")
+if os.path.exists(logo_path):
+    logo = Image.open(logo_path)
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.image(logo, use_column_width=True)
+    st.markdown("---")
 
 # Título principal
 st.title("Sistema de Gestão de Veículos")
@@ -33,6 +43,7 @@ if st.session_state.logged_in:
     st.sidebar.page_link("pages/registrar_saida.py", label="Registrar Saída")
     st.sidebar.page_link("pages/registrar_retorno.py", label="Registrar Retorno")
     st.sidebar.page_link("pages/gerar_relatorio.py", label="Gerar Relatório")
+    st.sidebar.page_link("pages/dashboard.py", label="Dashboard")
 else:
     # Formulário de login
     st.write("### Login")

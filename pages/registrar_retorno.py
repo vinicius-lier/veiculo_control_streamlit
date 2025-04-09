@@ -24,16 +24,18 @@ else:
     # Formulário de registro
     with st.form("return_form"):
         # Selecionar saída
-        exit_options = {f"{k} - {v['condutor']} ({v['tipo_veiculo']}) - {format_datetime(v['data_saida'])}": k 
+        exit_options = {f"{k} - {v['vehicle_plate']} - {format_datetime(v['data_saida'])}": k 
                        for k, v in active_exits.items()}
         selected_exit = st.selectbox("Selecione o veículo", options=list(exit_options.keys()))
         exit_id = exit_options[selected_exit]
         
         # Odômetro
-        odometro = st.number_input("Odômetro de Retorno", min_value=0, step=1)
+        odometro_inicial = st.number_input("Odômetro Inicial", min_value=0, step=1)
+        odometro_final = st.number_input("Odômetro Final", min_value=odometro_inicial, step=1)
+        quilometragem = odometro_final - odometro_inicial
         
-        # Check de avaria
-        tem_avaria = st.checkbox("Veículo com avaria no retorno?")
+        # Observações
+        observacoes = st.text_area("Observações")
         
         # Botão de submit
         submitted = st.form_submit_button("Registrar Retorno")
@@ -41,8 +43,8 @@ else:
         if submitted:
             # Preparar dados
             data = {
-                "odometro_retorno": odometro,
-                "tem_avaria_retorno": tem_avaria
+                "observations": observacoes,
+                "quilometragem": quilometragem
             }
             
             # Registrar retorno
