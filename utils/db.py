@@ -19,7 +19,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS condutores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nome TEXT NOT NULL,
-        cnh_numero TEXT UNIQUE NOT NULL,
+        cnh_numero TEXT NOT NULL,
         cnh_validade DATE NOT NULL,
         telefone TEXT NOT NULL,
         cnh_arquivo TEXT NOT NULL

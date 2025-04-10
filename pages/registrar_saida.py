@@ -2,8 +2,8 @@ import streamlit as st
 import sqlite3
 from datetime import datetime
 from utils.db import get_connection, verificar_condutor_disponivel, verificar_veiculo_disponivel
-from utils.checklist import get_checklist_options
 from utils.pdf_generator import gerar_pdf_saida
+from utils.checklist import get_checklist_saida_form
 
 # Configuração da página
 st.set_page_config(
@@ -56,7 +56,7 @@ def get_veiculos_disponiveis():
     return veiculos
 
 # Função para registrar saída
-def registrar_saida(condutor_id, veiculo_id, km_saida, checklist_saida, observacoes):
+def registrar_saida(condutor_id, veiculo_id, km_saida, checklist, observacoes):
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -82,7 +82,7 @@ def registrar_saida(condutor_id, veiculo_id, km_saida, checklist_saida, observac
             'condutor': {'nome': dados[0], 'cnh': dados[1]},
             'veiculo': {'marca': dados[2], 'modelo': dados[3], 'placa': dados[4]},
             'km_saida': km_saida,
-            'checklist': checklist_saida,
+            'checklist': checklist,
             'observacoes': observacoes
         }
         
@@ -96,7 +96,7 @@ def registrar_saida(condutor_id, veiculo_id, km_saida, checklist_saida, observac
         )
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (condutor_id, veiculo_id, datetime.now(), km_saida,
-              checklist_saida, observacoes, pdf_path))
+              checklist, observacoes, pdf_path))
         
         # Atualizar status do veículo
         cursor.execute("""
@@ -142,14 +142,8 @@ else:
         with col2:
             # Checklist
             st.subheader("Checklist de Saída")
-            checklist_opcoes = get_checklist_options('saida')
-            checklist_selecionado = []
-            
-            for categoria, itens in checklist_opcoes.items():
-                st.write(f"**{categoria}**")
-                for item in itens:
-                    if st.checkbox(item, key=f"check_{item}"):
-                        checklist_selecionado.append(item)
+            checklist_items = get_checklist_saida_form()
+            checklist = "\n".join(checklist_items)
             
             # Observações
             observacoes = st.text_area("Observações")
@@ -157,21 +151,20 @@ else:
         submitted = st.form_submit_button("Registrar Saída")
         
         if submitted:
-            if not checklist_selecionado:
+            if not checklist_items:
                 st.error("Por favor, preencha o checklist!")
             else:
-                checklist_texto = "\n".join(checklist_selecionado)
                 sucesso, mensagem = registrar_saida(
                     condutor_id,
                     veiculo_id,
                     km_saida,
-                    checklist_texto,
+                    checklist,
                     observacoes
                 )
                 
                 if sucesso:
                     st.success(mensagem)
                     # Limpar formulário
-                    st.experimental_rerun()
+                    st.rerun()
                 else:
                     st.error(mensagem) 

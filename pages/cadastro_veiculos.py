@@ -59,7 +59,7 @@ with st.form("cadastro_veiculo"):
             if sucesso:
                 st.success(mensagem)
                 # Limpar formulário
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.error(mensagem)
 

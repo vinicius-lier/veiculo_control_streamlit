@@ -93,7 +93,7 @@ with st.form("cadastro_condutor"):
                 if sucesso:
                     st.success(mensagem)
                     # Limpar formulário
-                    st.experimental_rerun()
+                    st.rerun()
                 else:
                     st.error(mensagem)
             else:
