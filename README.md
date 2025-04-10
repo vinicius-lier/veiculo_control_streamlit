@@ -1,87 +1,123 @@
 # Sistema de Controle de Veículos
 
-Sistema web desenvolvido em Streamlit para gerenciamento de frota de veículos, incluindo controle de saídas, manutenções e consumo de combustível.
+Sistema desenvolvido em Python e Streamlit para controle de entrada e saída de veículos (motos), com gerenciamento de condutores, veículos e registros.
 
 ## Funcionalidades
 
-- **Gestão de Usuários**
-  - Login e registro de usuários
-  - Controle de acesso por perfil
+- Autenticação de usuário
+- Dashboard com estatísticas
+- Cadastro de condutores
+- Cadastro de veículos
+- Registro de saída de veículos
+- Registro de entrada de veículos
+- Geração de PDF para registro de saída
+- Checklist de saída e entrada
+- Histórico de registros
 
-- **Gestão de Veículos**
-  - Cadastro de veículos
-  - Controle de status
-  - Histórico de manutenções
+## Requisitos
 
-- **Gestão de Motoristas**
-  - Cadastro de motoristas
-  - Controle de documentação
-  - Histórico de saídas
-
-- **Controle de Saídas**
-  - Registro de saída e retorno
-  - Checklist interno e externo
-  - Controle de quilometragem
-
-- **Manutenções**
-  - Registro de manutenções preventivas e corretivas
-  - Controle de custos
-  - Histórico por veículo
-
-- **Combustível**
-  - Registro de abastecimentos
-  - Controle de consumo
-  - Histórico por veículo
-
-- **Relatórios**
-  - Relatórios semanais
-  - Estatísticas de uso
-  - Análise de custos
-
-## Tecnologias Utilizadas
-
-- **Frontend**: Streamlit
-- **Backend**: Python
-- **Banco de Dados**: SQLite
-- **Cache**: Redis
-- **Visualização**: Plotly
-- **PDF**: ReportLab
+- Python 3.8 ou superior
+- pip (gerenciador de pacotes Python)
 
 ## Instalação
 
 1. Clone o repositório:
 ```bash
-git clone https://github.com/seu-usuario/veiculo_control_streamlit.git
-cd veiculo_control_streamlit
+git clone https://github.com/seu-usuario/controle-veiculos.git
+cd controle-veiculos
 ```
 
-2. Instale as dependências:
+2. Crie um ambiente virtual (opcional, mas recomendado):
+```bash
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate     # Windows
+```
+
+3. Instale as dependências:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Configure as variáveis de ambiente:
+## Executando o Sistema
+
+1. Ative o ambiente virtual (se estiver usando):
 ```bash
-cp .env.example .env
-# Edite o arquivo .env com suas configurações
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate     # Windows
 ```
 
-4. Execute o aplicativo:
+2. Execute o Streamlit:
 ```bash
 streamlit run app.py
 ```
 
+3. Acesse o sistema no navegador:
+```
+http://localhost:8501
+```
+
+## Credenciais de Acesso
+
+- Usuário: Vinicius
+- Senha: V1n1c1u5@#
+
 ## Estrutura do Projeto
 
 ```
-veiculo_control_streamlit/
-├── app.py              # Aplicativo principal
-├── database.py         # Funções de banco de dados
-├── redis_client.py     # Cliente Redis
-├── utils.py           # Funções utilitárias
-├── requirements.txt   # Dependências
-└── README.md         # Documentação
+controle_motos/
+├── app.py                 # Página principal e autenticação
+├── pages/                 # Páginas do sistema
+│   ├── home.py           # Dashboard
+│   ├── cadastro_veiculos.py
+│   ├── cadastro_condutores.py
+│   ├── registrar_saida.py
+│   ├── registrar_entrada.py
+├── auth/                  # Módulo de autenticação
+│   └── login.py
+├── utils/                 # Utilitários
+│   ├── db.py             # Banco de dados
+│   ├── pdf_generator.py  # Geração de PDF
+│   ├── checklist.py      # Opções de checklist
+├── data/                  # Dados e arquivos
+│   ├── veiculos.db       # Banco SQLite
+│   ├── arquivos/         # Arquivos gerados
+│   │   ├── cnhs/        # CNHs dos condutores
+│   │   ├── pdfs/        # PDFs de registro
 ```
+
+## Banco de Dados
+
+O sistema utiliza SQLite como banco de dados, com as seguintes tabelas:
+
+### condutores
+- id (PK)
+- nome
+- cnh_numero
+- cnh_validade
+- telefone
+- cnh_arquivo
+
+### veiculos
+- id (PK)
+- marca
+- modelo
+- placa
+- quilometragem_atual
+- status
+
+### registros
+- id (PK)
+- condutor_id (FK)
+- veiculo_id (FK)
+- data_saida
+- data_entrada
+- km_saida
+- km_entrada
+- checklist_saida
+- checklist_entrada
+- observacoes
+- pdf_saida
 
 ## Contribuição
 
