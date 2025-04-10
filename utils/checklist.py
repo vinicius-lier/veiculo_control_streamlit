@@ -1,50 +1,101 @@
-CHECKLIST_SAIDA = {
-    'Documentação': [
-        'CNH em dia',
-        'Documento do veículo em dia',
-        'Seguro em dia'
-    ],
-    'Veículo': [
-        'Combustível suficiente',
-        'Pneus em bom estado',
-        'Freios funcionando',
-        'Óleo em nível adequado',
-        'Água do radiador em nível',
-        'Luzes funcionando',
-        'Espelhos ajustados',
-        'Capacete em bom estado'
-    ],
-    'Itens de Segurança': [
-        'Capacete',
-        'Luvas',
-        'Jaqueta (se necessário)',
-        'Botas apropriadas'
-    ]
-}
+from typing import Dict, List
 
-CHECKLIST_ENTRADA = {
-    'Estado do Veículo': [
-        'Combustível',
-        'Quilometragem',
-        'Danos/Arranhões',
-        'Pneus',
-        'Freios',
-        'Óleo',
-        'Água do radiador',
-        'Luzes',
-        'Espelhos'
-    ],
-    'Itens de Segurança': [
-        'Capacete',
-        'Luvas',
-        'Jaqueta',
-        'Botas'
-    ],
-    'Documentação': [
-        'Documento do veículo',
-        'Multas (se houver)'
-    ]
-}
+class Checklist:
+    def __init__(self):
+        self._itens_saida = {
+            "Documentação": [
+                "CNH em dia",
+                "Documento do veículo",
+                "Seguro em dia"
+            ],
+            "Veículo": [
+                "Combustível",
+                "Óleo",
+                "Água",
+                "Pneus",
+                "Freios",
+                "Luzes",
+                "Espelhos",
+                "Limpeza"
+            ],
+            "Equipamentos": [
+                "Capacete",
+                "Luvas",
+                "Jaqueta",
+                "Botas"
+            ]
+        }
+        
+        self._itens_entrada = {
+            "Veículo": [
+                "Combustível",
+                "Óleo",
+                "Água",
+                "Pneus",
+                "Freios",
+                "Luzes",
+                "Espelhos",
+                "Limpeza",
+                "Danos"
+            ],
+            "Equipamentos": [
+                "Capacete",
+                "Luvas",
+                "Jaqueta",
+                "Botas"
+            ]
+        }
+        
+    def get_itens_saida(self) -> Dict[str, List[str]]:
+        """
+        Retorna os itens do checklist de saída.
+        
+        Returns:
+            Dicionário com os itens do checklist
+        """
+        return self._itens_saida
+        
+    def get_itens_entrada(self) -> Dict[str, List[str]]:
+        """
+        Retorna os itens do checklist de entrada.
+        
+        Returns:
+            Dicionário com os itens do checklist
+        """
+        return self._itens_entrada
+        
+    def validar_checklist(self, checklist: Dict[str, Dict[str, bool]]) -> bool:
+        """
+        Valida se todos os itens do checklist foram preenchidos.
+        
+        Args:
+            checklist: Dicionário com os itens do checklist
+            
+        Returns:
+            True se todos os itens foram preenchidos, False caso contrário
+        """
+        for categoria, itens in checklist.items():
+            for item, status in itens.items():
+                if status is None:
+                    return False
+        return True
+        
+    def formatar_checklist(self, checklist: Dict[str, Dict[str, bool]]) -> str:
+        """
+        Formata o checklist para exibição.
+        
+        Args:
+            checklist: Dicionário com os itens do checklist
+            
+        Returns:
+            String formatada com o checklist
+        """
+        texto = ""
+        for categoria, itens in checklist.items():
+            texto += f"\n{categoria}:\n"
+            for item, status in itens.items():
+                texto += f"- {item}: {'OK' if status else 'NOK'}\n"
+        return texto
 
 def get_checklist_options(tipo):
     """

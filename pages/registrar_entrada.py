@@ -1,8 +1,13 @@
 import streamlit as st
 import sqlite3
+import logging
+import os
 from datetime import datetime
 from utils.db import get_connection
 from utils.checklist import get_checklist_entrada_form
+
+# Configuração de logging
+logger = logging.getLogger(__name__)
 
 # Configuração da página
 st.set_page_config(
@@ -20,100 +25,117 @@ st.title("🚗 Registro de Entrada")
 
 # Função para obter veículos em uso
 def get_veiculos_em_uso():
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-    SELECT v.id, v.marca, v.modelo, v.placa, v.quilometragem_atual,
-           c.nome, c.cnh_numero, r.data_saida, r.id as registro_id
-    FROM veiculos v
-    JOIN registros r ON v.id = r.veiculo_id
-    JOIN condutores c ON r.condutor_id = c.id
-    WHERE r.data_entrada IS NULL
-    ORDER BY v.marca, v.modelo
-    """)
-    
-    veiculos = cursor.fetchall()
-    conn.close()
-    
-    return veiculos
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+        SELECT v.id, v.marca, v.modelo, v.placa, r.km_saida, r.id as registro_id
+        FROM veiculos v
+        JOIN registros r ON v.id = r.veiculo_id
+        WHERE r.data_entrada IS NULL
+        ORDER BY v.marca, v.modelo
+        """)
+        
+        veiculos = cursor.fetchall()
+        logger.info(f"Veículos em uso encontrados: {len(veiculos)}")
+        return veiculos
+    except Exception as e:
+        logger.error(f"Erro ao obter veículos em uso: {str(e)}")
+        st.error(f"Erro ao obter veículos em uso: {str(e)}")
+        return []
+    finally:
+        conn.close()
 
 # Função para registrar entrada
 def registrar_entrada(registro_id, km_entrada, checklist, observacoes):
-    conn = get_connection()
-    cursor = conn.cursor()
-    
+    conn = None
     try:
-        # Obter registro atual
+        logger.info(f"Iniciando registro de entrada - Registro ID: {registro_id}")
+        
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Obter dados do registro
         cursor.execute("""
-        SELECT veiculo_id, km_saida
-        FROM registros
-        WHERE id = ?
+        SELECT v.id, v.marca, v.modelo, v.placa, r.km_saida
+        FROM registros r
+        JOIN veiculos v ON r.veiculo_id = v.id
+        WHERE r.id = ?
         """, (registro_id,))
         
         registro = cursor.fetchone()
-        veiculo_id = registro[0]
-        km_saida = registro[1]
+        if not registro:
+            logger.error(f"Registro {registro_id} não encontrado")
+            return False, "Registro não encontrado."
         
         # Validar quilometragem
-        if km_entrada < km_saida:
-            return False, "A quilometragem de entrada não pode ser menor que a quilometragem de saída."
+        if km_entrada < registro[4]:
+            logger.warning(f"Quilometragem de entrada ({km_entrada}) menor que a de saída ({registro[4]})")
+            return False, "Quilometragem de entrada não pode ser menor que a quilometragem de saída."
         
         # Atualizar registro
         cursor.execute("""
         UPDATE registros
-        SET data_entrada = ?, km_entrada = ?, checklist_entrada = ?, observacoes = ?
+        SET data_entrada = ?,
+            km_entrada = ?,
+            checklist_entrada = ?,
+            observacoes_entrada = ?
         WHERE id = ?
-        """, (datetime.now(), km_entrada, checklist, observacoes, registro_id))
+        """, (
+            datetime.now(),
+            km_entrada,
+            checklist,
+            observacoes,
+            registro_id
+        ))
         
-        # Atualizar quilometragem do veículo
+        # Atualizar status do veículo
         cursor.execute("""
         UPDATE veiculos
-        SET quilometragem_atual = ?, status = 'disponivel'
+        SET status = 'disponivel',
+            quilometragem = ?
         WHERE id = ?
-        """, (km_entrada, veiculo_id))
+        """, (km_entrada, registro[0]))
         
         conn.commit()
+        logger.info(f"Registro de entrada concluído com sucesso - ID: {registro_id}")
         return True, "Entrada registrada com sucesso!"
     except Exception as e:
+        logger.error(f"Erro ao registrar entrada: {str(e)}")
+        if conn:
+            conn.rollback()
         return False, f"Erro ao registrar entrada: {str(e)}"
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 # Obter veículos em uso
 veiculos = get_veiculos_em_uso()
 
 if not veiculos:
-    st.warning("Não há veículos em uso para registro de entrada.")
+    st.warning("Não há veículos para registro de entrada.")
 else:
     # Formulário de registro
     with st.form("registro_entrada"):
-        # Seleção do veículo
-        veiculo_opcoes = {f"{v[1]} {v[2]} (Placa: {v[3]}) - Condutor: {v[5]}": v[0] for v in veiculos}
-        veiculo_selecionado = st.selectbox(
-            "Selecione o Veículo",
-            options=list(veiculo_opcoes.keys())
-        )
-        registro_id = veiculo_opcoes[veiculo_selecionado]
+        col1, col2 = st.columns(2)
         
-        # Obter informações do veículo selecionado
-        veiculo_info = next(v for v in veiculos if v[0] == registro_id)
+        with col1:
+            # Seleção do veículo
+            veiculo_opcoes = {f"{v[1]} {v[2]} (Placa: {v[3]})": v[5] for v in veiculos}
+            veiculo_selecionado = st.selectbox(
+                "Selecione o Veículo",
+                options=list(veiculo_opcoes.keys())
+            )
+            registro_id = veiculo_opcoes[veiculo_selecionado]
         
-        # Exibir informações do registro
-        st.subheader("Informações do Registro")
-        st.write(f"""
-        - Veículo: {veiculo_info[1]} {veiculo_info[2]} (Placa: {veiculo_info[3]})
-        - Condutor: {veiculo_info[5]} (CNH: {veiculo_info[6]})
-        - Quilometragem na Saída: {veiculo_info[4]} km
-        - Data de Saída: {veiculo_info[7]}
-        """)
-        
-        # Quilometragem
-        km_entrada = st.number_input(
-            "Quilometragem na Entrada",
-            min_value=veiculo_info[4],
-            step=1
-        )
+        with col2:
+            # Quilometragem
+            km_entrada = st.number_input(
+                "Quilometragem na Entrada",
+                min_value=0,
+                step=1
+            )
         
         # Checklist
         st.subheader("Checklist de Entrada")
@@ -129,12 +151,13 @@ else:
             if not checklist_items:
                 st.error("Por favor, preencha o checklist!")
             else:
-                sucesso, mensagem = registrar_entrada(
-                    registro_id,
-                    km_entrada,
-                    checklist,
-                    observacoes
-                )
+                with st.spinner("Registrando entrada..."):
+                    sucesso, mensagem = registrar_entrada(
+                        registro_id,
+                        km_entrada,
+                        checklist,
+                        observacoes
+                    )
                 
                 if sucesso:
                     st.success(mensagem)

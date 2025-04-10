@@ -1,170 +1,284 @@
 import streamlit as st
-import sqlite3
+import pandas as pd
+import logging
 from datetime import datetime
-from utils.db import get_connection, verificar_condutor_disponivel, verificar_veiculo_disponivel
-from utils.pdf_generator import gerar_pdf_saida
-from utils.checklist import get_checklist_saida_form
+from utils.auth import Auth
+from utils.database import Database
+from utils.checklist import Checklist
+from utils.pdf_generator import PDFGenerator
+from utils.validators import validar_quilometragem
+from utils.constants import (
+    TITULO_APP,
+    ICONE_APP,
+    SUCESSO_SAIDA,
+    AVISO_CAMPO_OBRIGATORIO
+)
+
+# Configuração do logger
+logger = logging.getLogger(__name__)
 
 # Configuração da página
 st.set_page_config(
-    page_title="Registro de Saída",
-    page_icon="🚀",
+    page_title=f"{TITULO_APP} - Registro de Saída",
+    page_icon=ICONE_APP,
     layout="wide"
 )
 
-# Verificar autenticação
-if 'autenticado' not in st.session_state or not st.session_state.autenticado:
-    st.switch_page("app.py")
-
-# Título da página
-st.title("🚀 Registro de Saída de Veículo")
-
-# Função para obter condutores disponíveis
-def get_condutores_disponiveis():
-    conn = get_connection()
-    cursor = conn.cursor()
+def get_condutores_disponiveis(db: Database) -> list:
+    """
+    Obtém a lista de condutores disponíveis.
     
-    cursor.execute("""
-    SELECT id, nome, cnh_numero
-    FROM condutores
-    WHERE id NOT IN (
-        SELECT condutor_id
-        FROM registros
-        WHERE data_entrada IS NULL
-    )
-    ORDER BY nome
-    """)
-    
-    condutores = cursor.fetchall()
-    conn.close()
-    return condutores
-
-# Função para obter veículos disponíveis
-def get_veiculos_disponiveis():
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-    SELECT id, marca, modelo, placa, quilometragem_atual
-    FROM veiculos
-    WHERE status = 'disponivel'
-    ORDER BY marca, modelo
-    """)
-    
-    veiculos = cursor.fetchall()
-    conn.close()
-    return veiculos
-
-# Função para registrar saída
-def registrar_saida(condutor_id, veiculo_id, km_saida, checklist, observacoes):
-    conn = get_connection()
-    cursor = conn.cursor()
-    
+    Args:
+        db: Instância do banco de dados
+        
+    Returns:
+        Lista de condutores disponíveis
+    """
     try:
-        # Verificar disponibilidade
-        if not verificar_condutor_disponivel(condutor_id):
-            return False, "Condutor já possui um veículo em uso."
+        condutores = db.execute_query("""
+            SELECT 
+                c.id,
+                c.nome,
+                c.cnh
+            FROM condutores c
+            LEFT JOIN registros r ON c.id = r.condutor_id
+            WHERE r.data_entrada IS NOT NULL
+            OR r.id IS NULL
+            ORDER BY c.nome
+        """)
         
-        if not verificar_veiculo_disponivel(veiculo_id):
-            return False, "Veículo não está disponível."
+        return condutores
+    except Exception as e:
+        logger.error(f"Erro ao obter condutores disponíveis: {str(e)}")
+        return []
+
+def get_veiculos_disponiveis(db: Database) -> list:
+    """
+    Obtém a lista de veículos disponíveis.
+    
+    Args:
+        db: Instância do banco de dados
         
-        # Obter dados para o PDF
-        cursor.execute("""
-        SELECT c.nome, c.cnh_numero, v.marca, v.modelo, v.placa
-        FROM condutores c, veiculos v
-        WHERE c.id = ? AND v.id = ?
-        """, (condutor_id, veiculo_id))
+    Returns:
+        Lista de veículos disponíveis
+    """
+    try:
+        veiculos = db.execute_query("""
+            SELECT 
+                v.id,
+                v.marca,
+                v.modelo,
+                v.placa,
+                v.quilometragem
+            FROM veiculos v
+            LEFT JOIN registros r ON v.id = r.veiculo_id
+            WHERE r.data_entrada IS NOT NULL
+            OR r.id IS NULL
+            ORDER BY v.marca, v.modelo
+        """)
         
-        dados = cursor.fetchone()
+        return veiculos
+    except Exception as e:
+        logger.error(f"Erro ao obter veículos disponíveis: {str(e)}")
+        return []
+
+def registrar_saida(
+    db: Database,
+    condutor_id: int,
+    veiculo_id: int,
+    quilometragem: int,
+    checklist: dict,
+    observacoes: str = None
+) -> tuple[bool, str]:
+    """
+    Registra a saída de um veículo.
+    
+    Args:
+        db: Instância do banco de dados
+        condutor_id: ID do condutor
+        veiculo_id: ID do veículo
+        quilometragem: Quilometragem de saída
+        checklist: Checklist de saída
+        observacoes: Observações (opcional)
         
-        # Gerar PDF
+    Returns:
+        Tuple com (bool indicando sucesso, mensagem)
+    """
+    try:
+        # Validações
+        if not all([condutor_id, veiculo_id, quilometragem]):
+            return False, AVISO_CAMPO_OBRIGATORIO
+            
+        # Verifica se condutor está disponível
+        condutor = db.execute_query("""
+            SELECT c.* 
+            FROM condutores c
+            LEFT JOIN registros r ON c.id = r.condutor_id
+            WHERE c.id = ?
+            AND (r.data_entrada IS NOT NULL OR r.id IS NULL)
+        """, (condutor_id,))
+        
+        if not condutor:
+            return False, "Condutor não está disponível"
+            
+        # Verifica se veículo está disponível
+        veiculo = db.execute_query("""
+            SELECT v.*
+            FROM veiculos v
+            LEFT JOIN registros r ON v.id = r.veiculo_id
+            WHERE v.id = ?
+            AND (r.data_entrada IS NOT NULL OR r.id IS NULL)
+        """, (veiculo_id,))
+        
+        if not veiculo:
+            return False, "Veículo não está disponível"
+            
+        # Valida quilometragem
+        valido, msg = validar_quilometragem(quilometragem, veiculo[0]['quilometragem'])
+        if not valido:
+            return False, msg
+            
+        # Registra saída
+        query = """
+            INSERT INTO registros (
+                condutor_id, veiculo_id, data_saida,
+                km_saida, checklist_saida, observacoes_saida
+            ) VALUES (?, ?, ?, ?, ?, ?)
+        """
+        db.execute_query(query, (
+            condutor_id,
+            veiculo_id,
+            datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            quilometragem,
+            str(checklist),
+            observacoes
+        ))
+        
+        # Atualiza quilometragem do veículo
+        db.execute_query(
+            "UPDATE veiculos SET quilometragem = ? WHERE id = ?",
+            (quilometragem, veiculo_id)
+        )
+        
+        # Gera PDF
+        pdf = PDFGenerator()
         dados_pdf = {
-            'condutor': {'nome': dados[0], 'cnh': dados[1]},
-            'veiculo': {'marca': dados[2], 'modelo': dados[3], 'placa': dados[4]},
-            'km_saida': km_saida,
+            'condutor_nome': condutor[0]['nome'],
+            'condutor_cnh': condutor[0]['cnh'],
+            'veiculo_placa': veiculo[0]['placa'],
+            'veiculo_modelo': f"{veiculo[0]['marca']} {veiculo[0]['modelo']}",
+            'quilometragem': quilometragem,
             'checklist': checklist,
             'observacoes': observacoes
         }
+        pdf.gerar_pdf_saida(dados_pdf)
         
-        pdf_path = gerar_pdf_saida(dados_pdf)
+        logger.info(f"Saída registrada: Condutor {condutor[0]['nome']}, Veículo {veiculo[0]['placa']}")
+        return True, SUCESSO_SAIDA
         
-        # Registrar saída
-        cursor.execute("""
-        INSERT INTO registros (
-            condutor_id, veiculo_id, data_saida, km_saida,
-            checklist_saida, observacoes, pdf_saida
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (condutor_id, veiculo_id, datetime.now(), km_saida,
-              checklist, observacoes, pdf_path))
-        
-        # Atualizar status do veículo
-        cursor.execute("""
-        UPDATE veiculos
-        SET status = 'em uso'
-        WHERE id = ?
-        """, (veiculo_id,))
-        
-        conn.commit()
-        return True, "Saída registrada com sucesso!"
     except Exception as e:
-        return False, f"Erro ao registrar saída: {str(e)}"
-    finally:
-        conn.close()
+        logger.error(f"Erro ao registrar saída: {str(e)}")
+        return False, str(e)
 
-# Obter dados para os selects
-condutores = get_condutores_disponiveis()
-veiculos = get_veiculos_disponiveis()
-
-if not condutores:
-    st.warning("Não há condutores disponíveis para retirada de veículo.")
-elif not veiculos:
-    st.warning("Não há veículos disponíveis para retirada.")
-else:
-    # Formulário de registro
-    with st.form("registro_saida"):
-        col1, col2 = st.columns(2)
+def main():
+    """
+    Função principal da página.
+    """
+    try:
+        # Verifica autenticação
+        auth = Auth()
+        if not auth.verificar_autenticacao():
+            st.switch_page("app.py")
+            
+        # Inicializa banco de dados e checklist
+        db = Database()
+        checklist = Checklist()
         
-        with col1:
-            # Select de condutores
-            condutor_opcoes = {f"{c[1]} (CNH: {c[2]})": c[0] for c in condutores}
-            condutor_selecionado = st.selectbox("Selecione o Condutor", options=list(condutor_opcoes.keys()))
-            condutor_id = condutor_opcoes[condutor_selecionado]
+        # Título
+        st.title("Registro de Saída")
+        
+        # Obtém condutores e veículos disponíveis
+        condutores = get_condutores_disponiveis(db)
+        veiculos = get_veiculos_disponiveis(db)
+        
+        if not condutores:
+            st.warning("Não há condutores disponíveis")
+            return
             
-            # Select de veículos
-            veiculo_opcoes = {f"{v[1]} {v[2]} - {v[3]} (KM: {v[4]})": v[0] for v in veiculos}
-            veiculo_selecionado = st.selectbox("Selecione o Veículo", options=list(veiculo_opcoes.keys()))
-            veiculo_id = veiculo_opcoes[veiculo_selecionado]
+        if not veiculos:
+            st.warning("Não há veículos disponíveis")
+            return
             
+        # Formulário
+        with st.form("form_saida"):
+            # Seleção de condutor e veículo
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                condutor_id = st.selectbox(
+                    "Condutor",
+                    [c['id'] for c in condutores],
+                    format_func=lambda x: next(
+                        c['nome'] for c in condutores if c['id'] == x
+                    )
+                )
+                
+            with col2:
+                veiculo_id = st.selectbox(
+                    "Veículo",
+                    [v['id'] for v in veiculos],
+                    format_func=lambda x: f"{next(v['marca'] for v in veiculos if v['id'] == x)} {next(v['modelo'] for v in veiculos if v['id'] == x)} - {next(v['placa'] for v in veiculos if v['id'] == x)}"
+                )
+                
             # Quilometragem
-            km_saida = st.number_input("Quilometragem na Saída", min_value=0, step=1)
-        
-        with col2:
+            quilometragem = st.number_input(
+                "Quilometragem de Saída",
+                min_value=next(
+                    v['quilometragem'] for v in veiculos if v['id'] == veiculo_id
+                ),
+                value=next(
+                    v['quilometragem'] for v in veiculos if v['id'] == veiculo_id
+                )
+            )
+            
             # Checklist
             st.subheader("Checklist de Saída")
-            checklist_items = get_checklist_saida_form()
-            checklist = "\n".join(checklist_items)
             
+            checklist_data = {}
+            itens = checklist.get_itens_saida()
+            
+            for categoria, items in itens.items():
+                st.write(f"**{categoria}**")
+                for item in items:
+                    checklist_data[f"{categoria} - {item}"] = st.checkbox(
+                        item,
+                        key=f"saida_{categoria}_{item}"
+                    )
+                st.write("---")
+                
             # Observações
             observacoes = st.text_area("Observações")
-        
-        submitted = st.form_submit_button("Registrar Saída")
-        
-        if submitted:
-            if not checklist_items:
-                st.error("Por favor, preencha o checklist!")
-            else:
+            
+            # Botão de registro
+            if st.form_submit_button("Registrar Saída"):
                 sucesso, mensagem = registrar_saida(
+                    db,
                     condutor_id,
                     veiculo_id,
-                    km_saida,
-                    checklist,
+                    quilometragem,
+                    checklist_data,
                     observacoes
                 )
                 
                 if sucesso:
                     st.success(mensagem)
-                    # Limpar formulário
                     st.rerun()
                 else:
-                    st.error(mensagem) 
+                    st.error(mensagem)
+                    
+    except Exception as e:
+        logger.error(f"Erro na página de registro de saída: {str(e)}")
+        st.error("Ocorreu um erro ao carregar a página. Por favor, tente novamente.")
+
+if __name__ == "__main__":
+    main() 
